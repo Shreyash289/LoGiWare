@@ -52,3 +52,22 @@ $env:PORT="8080"
 ```
 
 If MySQL is unavailable, the app starts with demo in-memory data so the UI can still be tested.
+
+## Vercel Deployment
+
+This repo includes Vercel support:
+
+- `vercel.json` serves the frontend from `dist/`
+- `scripts/build-vercel.js` copies `frontend/public` into `dist/`
+- `api/index.js` provides Vercel serverless API routes for `/api/*`
+
+After pushing these files, redeploy the project on Vercel. The 404 page appears when Vercel has no frontend output or route config to serve.
+
+For hosted MySQL on Vercel, set one of these environment variables in Vercel Project Settings:
+
+```text
+MYSQL_URL=mysql://user:password@host:3306/database
+DATABASE_URL=mysql://user:password@host:3306/database
+```
+
+If no MySQL URL is configured, the deployed app uses demo in-memory data.

@@ -368,6 +368,7 @@ async function api(url, options = {}) {
 
 function connectStream() {
   if (window.liveEvents) window.liveEvents.close();
+  if (window.livePoll) clearInterval(window.livePoll);
   window.liveEvents = new EventSource("/api/stream", { withCredentials: true });
   window.liveEvents.addEventListener("update", (event) => {
     state.stats = JSON.parse(event.data);
@@ -376,6 +377,14 @@ function connectStream() {
   });
   window.liveEvents.onerror = () => {
     $("#liveState").textContent = "Offline";
+    window.liveEvents.close();
+    window.livePoll = setInterval(async () => {
+      if (!app.classList.contains("hidden")) {
+        state.stats = await api("/api/stats");
+        if (state.active === "dashboard") renderStats();
+        $("#liveState").textContent = "Live";
+      }
+    }, 5000);
   };
 }
 
