@@ -7,98 +7,250 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div id="toast" class="toast"></div>
+    <div id="toastHost" class="toast-host"></div>
 
     <main id="login" class="login-shell">
-      <section class="login-panel">
-        <div class="brand-mark">LW</div>
-        <h1>LoGiWare</h1>
-        <p>Admin Console</p>
-        <form id="loginForm" class="stack">
+      <section class="login-card">
+        <div class="login-art">
+          <div class="brand-mark">LW</div>
+          <span class="eyebrow">Warehouse OS</span>
+          <h1>LoGiWare</h1>
+          <p>Inventory, orders, shipments, and returns in one fast console.</p>
+          <div class="login-metrics">
+            <span><strong>Live</strong> sync</span>
+            <span><strong>7</strong> modules</span>
+          </div>
+        </div>
+        <form id="loginForm" class="login-form">
+          <div>
+            <h2>Admin Login</h2>
+            <p>Use your DBMS project credentials.</p>
+          </div>
           <label>
             <span>User</span>
             <input name="username" value="admin" autocomplete="username" required />
           </label>
           <label>
-            <span>Pass</span>
+            <span>Password</span>
             <input name="password" type="password" value="admin123" autocomplete="current-password" required />
           </label>
-          <button class="primary" type="submit">
-            <span class="icon">-&gt;</span>
-            Login
-          </button>
+          <button class="btn btn-primary" type="submit">Login</button>
         </form>
       </section>
     </main>
 
     <div id="app" class="app hidden">
-      <aside class="sidebar">
+      <aside id="sidebar" class="sidebar">
         <div class="side-brand">
           <div class="brand-mark small">LW</div>
-          <strong>LoGiWare</strong>
+          <div class="brand-copy">
+            <strong>LoGiWare</strong>
+            <span>Admin</span>
+          </div>
+          <button id="collapseBtn" class="icon-button side-toggle" title="Collapse sidebar">CL</button>
         </div>
         <nav id="nav"></nav>
+        <div class="side-card">
+          <span class="sync-dot"></span>
+          <div>
+            <strong>System Live</strong>
+            <p>MySQL ready</p>
+          </div>
+        </div>
       </aside>
 
       <section class="workspace">
         <header class="topbar">
           <div>
+            <span id="pageKicker" class="eyebrow">Overview</span>
             <h2 id="pageTitle">Dashboard</h2>
-            <span id="liveState" class="live-dot">Live</span>
           </div>
+
+          <div class="global-search">
+            <span>SR</span>
+            <input id="globalSearch" placeholder="Search products, orders, suppliers" />
+            <div id="globalResults" class="global-results hidden"></div>
+          </div>
+
           <div class="top-actions">
-            <button id="themeToggle" class="ghost" title="Theme">DM</button>
-            <button id="logoutBtn" class="ghost" title="Logout">LO</button>
+            <button id="notificationBtn" class="icon-button notify" title="Notifications">NT<span id="noticeCount">1</span></button>
+            <button id="themeToggle" class="theme-switch" title="Toggle theme" aria-label="Toggle dark mode">
+              <span></span>
+            </button>
+            <div class="profile">
+              <button id="profileBtn" class="profile-button" title="Profile">
+                <span class="avatar">AD</span>
+                <span class="profile-name">Admin</span>
+              </button>
+              <div id="profileMenu" class="menu hidden">
+                <button id="roleToggle">Role: Admin</button>
+                <button id="logoutBtn">Logout</button>
+              </div>
+            </div>
           </div>
         </header>
 
         <section id="dashboard" class="page active">
-          <div id="statGrid" class="stats"></div>
-          <div class="split">
+          <div class="hero-panel">
+            <div>
+              <span id="liveState" class="live-dot">Live Sync</span>
+              <h1>Warehouse command center</h1>
+              <p>Track inventory health, order flow, shipment movement, and returns from one dashboard.</p>
+            </div>
+            <button id="quickAddBtn" class="btn btn-light">Quick Add</button>
+          </div>
+
+          <div id="statGrid" class="stats skeleton-grid"></div>
+
+          <div class="dashboard-grid">
+            <article class="panel chart-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Inventory Trend</h3>
+                  <p>Stock movement</p>
+                </div>
+                <span class="pill info">Live</span>
+              </div>
+              <canvas id="inventoryChart" height="180"></canvas>
+            </article>
+
+            <article class="panel chart-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Orders vs Shipments</h3>
+                  <p>Current flow</p>
+                </div>
+                <span class="pill ok">KPI</span>
+              </div>
+              <canvas id="flowChart" height="180"></canvas>
+            </article>
+
             <article class="panel">
               <div class="panel-head">
-                <h3>Low Stock</h3>
+                <div>
+                  <h3>Warehouse Capacity</h3>
+                  <p>Usage by hub</p>
+                </div>
+                <span class="pill warn">Watch</span>
+              </div>
+              <div id="capacityList" class="progress-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Low Stock Alerts</h3>
+                  <p>Reorder required</p>
+                </div>
                 <span class="pill danger">Alert</span>
               </div>
               <div id="alerts" class="alert-list"></div>
             </article>
+
             <article class="panel">
               <div class="panel-head">
-                <h3>Flow</h3>
-                <span class="pill ok">Today</span>
+                <div>
+                  <h3>Top Products</h3>
+                  <p>Demo insights</p>
+                </div>
+                <span class="pill info">Rank</span>
               </div>
-              <div class="timeline">
-                <span></span><p>Orders checked</p>
-                <span></span><p>Shipments synced</p>
-                <span></span><p>Inventory scanned</p>
+              <div id="topProducts" class="rank-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Activity</h3>
+                  <p>Recent actions</p>
+                </div>
+                <span class="pill ok">Now</span>
               </div>
+              <div id="activityList" class="timeline"></div>
             </article>
           </div>
         </section>
 
         <section id="module" class="page">
-          <div class="module-bar">
+          <div class="module-header">
+            <div>
+              <h3 id="moduleTitle">Records</h3>
+              <p id="moduleMeta">0 records</p>
+            </div>
+            <div class="module-actions">
+              <button id="exportCsvBtn" class="btn btn-secondary">CSV</button>
+              <button id="exportPdfBtn" class="btn btn-secondary">PDF</button>
+              <button id="newBtn" class="btn btn-primary">New</button>
+            </div>
+          </div>
+
+          <div class="table-tools">
             <div class="search">
               <span>SR</span>
-              <input id="searchInput" placeholder="Search" />
+              <input id="searchInput" placeholder="Search current table" />
             </div>
             <select id="statusFilter" class="hidden"></select>
-            <button id="newBtn" class="primary"><span class="icon">+</span>New</button>
+            <select id="pageSize">
+              <option>5</option>
+              <option selected>10</option>
+              <option>20</option>
+            </select>
           </div>
-          <div id="formPanel" class="form-panel hidden">
-            <form id="recordForm" class="record-form"></form>
-          </div>
-          <div class="table-wrap">
+
+          <div class="table-card">
+            <div id="loading" class="skeleton-table hidden">
+              <span></span><span></span><span></span><span></span>
+            </div>
             <table>
               <thead id="tableHead"></thead>
               <tbody id="tableBody"></tbody>
             </table>
-            <div id="loading" class="loading hidden"><span></span>Loading</div>
+          </div>
+
+          <div class="pagination">
+            <span id="pageInfo">Page 1</span>
+            <div>
+              <button id="prevPage" class="icon-button">PV</button>
+              <button id="nextPage" class="icon-button">NX</button>
+            </div>
           </div>
         </section>
       </section>
+
+      <button id="fabBtn" class="fab" title="Quick add">+</button>
     </div>
 
+    <div id="recordModal" class="modal-backdrop hidden">
+      <section class="modal">
+        <div class="modal-head">
+          <div>
+            <span class="eyebrow">Record</span>
+            <h3 id="modalTitle">New Record</h3>
+          </div>
+          <button id="closeModal" class="icon-button">x</button>
+        </div>
+        <form id="recordForm" class="record-form"></form>
+      </section>
+    </div>
+
+    <div id="confirmModal" class="modal-backdrop hidden">
+      <section class="modal confirm">
+        <h3>Delete record?</h3>
+        <p>This action removes the selected row from the database.</p>
+        <div class="modal-actions">
+          <button id="cancelDelete" class="btn btn-secondary">Cancel</button>
+          <button id="confirmDelete" class="btn btn-danger">Delete</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="notificationMenu" class="menu notice-menu hidden">
+      <strong>Notifications</strong>
+      <p>Low stock requires attention.</p>
+      <p>Shipment sync is active.</p>
+    </div>
+
+    <div id="chartTip" class="chart-tip hidden"></div>
     <script src="/app.js"></script>
   </body>
 </html>
