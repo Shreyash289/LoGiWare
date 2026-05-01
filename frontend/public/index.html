@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LoGiWare</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="toast" class="toast"></div>
+
+    <main id="login" class="login-shell">
+      <section class="login-panel">
+        <div class="brand-mark">LW</div>
+        <h1>LoGiWare</h1>
+        <p>Admin Console</p>
+        <form id="loginForm" class="stack">
+          <label>
+            <span>User</span>
+            <input name="username" value="admin" autocomplete="username" required />
+          </label>
+          <label>
+            <span>Pass</span>
+            <input name="password" type="password" value="admin123" autocomplete="current-password" required />
+          </label>
+          <button class="primary" type="submit">
+            <span class="icon">-&gt;</span>
+            Login
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <div id="app" class="app hidden">
+      <aside class="sidebar">
+        <div class="side-brand">
+          <div class="brand-mark small">LW</div>
+          <strong>LoGiWare</strong>
+        </div>
+        <nav id="nav"></nav>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h2 id="pageTitle">Dashboard</h2>
+            <span id="liveState" class="live-dot">Live</span>
+          </div>
+          <div class="top-actions">
+            <button id="themeToggle" class="ghost" title="Theme">DM</button>
+            <button id="logoutBtn" class="ghost" title="Logout">LO</button>
+          </div>
+        </header>
+
+        <section id="dashboard" class="page active">
+          <div id="statGrid" class="stats"></div>
+          <div class="split">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>Low Stock</h3>
+                <span class="pill danger">Alert</span>
+              </div>
+              <div id="alerts" class="alert-list"></div>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>Flow</h3>
+                <span class="pill ok">Today</span>
+              </div>
+              <div class="timeline">
+                <span></span><p>Orders checked</p>
+                <span></span><p>Shipments synced</p>
+                <span></span><p>Inventory scanned</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="module" class="page">
+          <div class="module-bar">
+            <div class="search">
+              <span>SR</span>
+              <input id="searchInput" placeholder="Search" />
+            </div>
+            <select id="statusFilter" class="hidden"></select>
+            <button id="newBtn" class="primary"><span class="icon">+</span>New</button>
+          </div>
+          <div id="formPanel" class="form-panel hidden">
+            <form id="recordForm" class="record-form"></form>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead id="tableHead"></thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+            <div id="loading" class="loading hidden"><span></span>Loading</div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

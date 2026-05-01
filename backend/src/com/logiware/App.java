@@ -1,0 +1,791 @@
+package com.logiware;
+
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+
+public class App {
+    private static final Path PUBLIC_DIR = Path.of("frontend", "public").toAbsolutePath().normalize();
+    private static final Map<String, String> sessions = new ConcurrentHashMap<>();
+    private static final SecureRandom random = new SecureRandom();
+
+    private static Store store;
+
+    public static void main(String[] args) throws Exception {
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        store = Store.create();
+
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        server.createContext("/api", new ApiHandler());
+        server.createContext("/", new StaticHandler());
+        server.setExecutor(Executors.newCachedThreadPool());
+        server.start();
+        System.out.println("LoGiWare running at http://localhost:" + port);
+        System.out.println(store.mode());
+    }
+
+    static final class ApiHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            try {
+                route(exchange);
+            } catch (BadRequest ex) {
+                json(exchange, 400, Map.of("error", ex.getMessage()));
+            } catch (Unauthorized ex) {
+                json(exchange, 401, Map.of("error", "Unauthorized"));
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                json(exchange, 500, Map.of("error", "Server error"));
+            }
+        }
+
+        private void route(HttpExchange exchange) throws Exception {
+            String method = exchange.getRequestMethod();
+            String path = exchange.getRequestURI().getPath();
+
+            if ("OPTIONS".equals(method)) {
+                cors(exchange);
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if ("/api/login".equals(path) && "POST".equals(method)) {
+                Map<String, Object> body = Json.parseObject(readBody(exchange));
+                String username = requiredText(body, "username");
+                String password = requiredText(body, "password");
+                if (!store.validAdmin(username, password)) {
+                    throw new Unauthorized();
+                }
+                String token = token();
+                sessions.put(token, username);
+                Headers headers = exchange.getResponseHeaders();
+                headers.add("Set-Cookie", "LWSESSION=" + token + "; HttpOnly; SameSite=Lax; Path=/");
+                json(exchange, 200, Map.of("user", username));
+                return;
+            }
+
+            if ("/api/logout".equals(path) && "POST".equals(method)) {
+                currentUser(exchange).ifPresent(token -> sessions.remove(token));
+                exchange.getResponseHeaders().add("Set-Cookie", "LWSESSION=; Max-Age=0; Path=/");
+                json(exchange, 200, Map.of("ok", true));
+                return;
+            }
+
+            requireAuth(exchange);
+
+            if ("/api/me".equals(path) && "GET".equals(method)) {
+                json(exchange, 200, Map.of("user", "admin"));
+                return;
+            }
+            if ("/api/stats".equals(path) && "GET".equals(method)) {
+                json(exchange, 200, store.stats());
+                return;
+            }
+            if ("/api/stream".equals(path) && "GET".equals(method)) {
+                stream(exchange);
+                return;
+            }
+
+            String[] parts = path.substring("/api/".length()).split("/");
+            if (parts.length == 0 || parts[0].isBlank()) {
+                throw new BadRequest("Missing resource");
+            }
+            Entity entity = Entity.byRoute(parts[0]);
+            Integer id = parts.length > 1 ? parseId(parts[1]) : null;
+
+            if ("GET".equals(method) && id == null) {
+                json(exchange, 200, store.list(entity, query(exchange, "q"), query(exchange, "status")));
+                return;
+            }
+            if ("POST".equals(method) && id == null) {
+                Map<String, Object> body = Json.parseObject(readBody(exchange));
+                json(exchange, 201, store.create(entity, body));
+                return;
+            }
+            if ("PUT".equals(method) && id != null) {
+                Map<String, Object> body = Json.parseObject(readBody(exchange));
+                json(exchange, 200, store.update(entity, id, body));
+                return;
+            }
+            if ("DELETE".equals(method) && id != null) {
+                store.delete(entity, id);
+                json(exchange, 200, Map.of("ok", true));
+                return;
+            }
+
+            json(exchange, 404, Map.of("error", "Not found"));
+        }
+
+        private void stream(HttpExchange exchange) throws Exception {
+            Headers headers = exchange.getResponseHeaders();
+            cors(exchange);
+            headers.set("Content-Type", "text/event-stream");
+            headers.set("Cache-Control", "no-cache");
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream out = exchange.getResponseBody()) {
+                for (int i = 0; i < 120; i++) {
+                    String payload = "event: update\ndata: " + Json.stringify(store.stats()) + "\n\n";
+                    out.write(payload.getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    Thread.sleep(5000);
+                }
+            }
+        }
+    }
+
+    static final class StaticHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String rawPath = exchange.getRequestURI().getPath();
+            String route = "/".equals(rawPath) ? "/index.html" : rawPath;
+            Path file = PUBLIC_DIR.resolve(route.substring(1)).normalize();
+            if (!file.startsWith(PUBLIC_DIR) || !Files.exists(file) || Files.isDirectory(file)) {
+                file = PUBLIC_DIR.resolve("index.html");
+            }
+            byte[] bytes = Files.readAllBytes(file);
+            exchange.getResponseHeaders().set("Content-Type", contentType(file));
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    enum Entity {
+        PRODUCTS("products", "products", List.of("name", "category", "price", "weight", "reorderLevel"), "name"),
+        WAREHOUSES("warehouses", "warehouses", List.of("name", "location", "capacity", "storageType"), "name"),
+        INVENTORY("inventory", "inventory", List.of("productId", "warehouseId", "quantity"), "quantity"),
+        SUPPLIERS("suppliers", "suppliers", List.of("name", "contactPerson", "email", "phone", "address"), "name"),
+        ORDERS("orders", "purchase_orders", List.of("supplierId", "productId", "quantity", "status", "expectedDate"), "status"),
+        SHIPMENTS("shipments", "shipments", List.of("orderId", "trackingNumber", "carrier", "status", "origin", "destination", "shipDate", "deliveryDate"), "status"),
+        RETURNS("returns", "product_returns", List.of("productId", "shipmentId", "quantity", "reason", "status"), "status");
+
+        final String route;
+        final String table;
+        final List<String> fields;
+        final String label;
+
+        Entity(String route, String table, List<String> fields, String label) {
+            this.route = route;
+            this.table = table;
+            this.fields = fields;
+            this.label = label;
+        }
+
+        static Entity byRoute(String route) {
+            for (Entity entity : values()) {
+                if (entity.route.equals(route)) {
+                    return entity;
+                }
+            }
+            throw new BadRequest("Unknown resource: " + route);
+        }
+    }
+
+    interface Store {
+        String mode();
+        boolean validAdmin(String username, String password) throws Exception;
+        List<Map<String, Object>> list(Entity entity, String search, String status) throws Exception;
+        Map<String, Object> create(Entity entity, Map<String, Object> body) throws Exception;
+        Map<String, Object> update(Entity entity, int id, Map<String, Object> body) throws Exception;
+        void delete(Entity entity, int id) throws Exception;
+        Map<String, Object> stats() throws Exception;
+
+        static Store create() {
+            String url = System.getenv().getOrDefault("DB_URL", "jdbc:mysql://localhost:3306/logiware");
+            String user = System.getenv().getOrDefault("DB_USER", "root");
+            String password = System.getenv().getOrDefault("DB_PASSWORD", "");
+            try {
+                JdbcStore jdbc = new JdbcStore(url, user, password);
+                jdbc.init();
+                return jdbc;
+            } catch (Exception ex) {
+                System.out.println("MySQL unavailable, using in-memory demo store: " + ex.getMessage());
+                return new MemoryStore();
+            }
+        }
+    }
+
+    static final class JdbcStore implements Store {
+        private final String url;
+        private final String user;
+        private final String password;
+
+        JdbcStore(String url, String user, String password) {
+            this.url = url;
+            this.user = user;
+            this.password = password;
+        }
+
+        public String mode() {
+            return "Connected to MySQL through JDBC: " + url;
+        }
+
+        private Connection connection() throws SQLException {
+            return DriverManager.getConnection(url, user, password);
+        }
+
+        void init() throws Exception {
+            try (Connection con = connection(); Statement st = con.createStatement()) {
+                st.execute("CREATE TABLE IF NOT EXISTS admin_users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(80) UNIQUE NOT NULL, password_hash VARCHAR(128) NOT NULL)");
+                st.execute("CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, category VARCHAR(80) NOT NULL, price DECIMAL(10,2) NOT NULL, weight DECIMAL(10,2) NOT NULL, reorderLevel INT NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS warehouses (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, location VARCHAR(160) NOT NULL, capacity INT NOT NULL, storageType VARCHAR(80) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS suppliers (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, contactPerson VARCHAR(120), email VARCHAR(120), phone VARCHAR(40), address VARCHAR(220), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS inventory (id INT AUTO_INCREMENT PRIMARY KEY, productId INT NOT NULL, warehouseId INT NOT NULL, quantity INT NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS purchase_orders (id INT AUTO_INCREMENT PRIMARY KEY, supplierId INT NOT NULL, productId INT NOT NULL, quantity INT NOT NULL, status VARCHAR(40) NOT NULL, expectedDate VARCHAR(40), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS shipments (id INT AUTO_INCREMENT PRIMARY KEY, orderId INT, trackingNumber VARCHAR(120), carrier VARCHAR(120), status VARCHAR(40) NOT NULL, origin VARCHAR(160), destination VARCHAR(160), shipDate VARCHAR(40), deliveryDate VARCHAR(40), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS product_returns (id INT AUTO_INCREMENT PRIMARY KEY, productId INT NOT NULL, shipmentId INT, quantity INT NOT NULL, reason VARCHAR(220), status VARCHAR(40) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+            }
+            seed();
+        }
+
+        private void seed() throws Exception {
+            try (Connection con = connection()) {
+                try (PreparedStatement count = con.prepareStatement("SELECT COUNT(*) FROM admin_users"); ResultSet rs = count.executeQuery()) {
+                    rs.next();
+                    if (rs.getInt(1) == 0) {
+                        try (PreparedStatement ps = con.prepareStatement("INSERT INTO admin_users (username, password_hash) VALUES (?, ?)")) {
+                            ps.setString(1, "admin");
+                            ps.setString(2, hash("admin123"));
+                            ps.executeUpdate();
+                        }
+                    }
+                }
+                try (PreparedStatement count = con.prepareStatement("SELECT COUNT(*) FROM products"); ResultSet rs = count.executeQuery()) {
+                    rs.next();
+                    if (rs.getInt(1) > 0) {
+                        return;
+                    }
+                }
+            }
+            create(Entity.PRODUCTS, Map.of("name", "Barcode Scanner", "category", "Electronics", "price", 4200, "weight", 0.6, "reorderLevel", 25));
+            create(Entity.PRODUCTS, Map.of("name", "Packing Tape", "category", "Packaging", "price", 75, "weight", 0.2, "reorderLevel", 120));
+            create(Entity.WAREHOUSES, Map.of("name", "North Hub", "location", "Delhi", "capacity", 25000, "storageType", "Ambient"));
+            create(Entity.WAREHOUSES, Map.of("name", "Cold Bay", "location", "Pune", "capacity", 8000, "storageType", "Cold"));
+            create(Entity.SUPPLIERS, Map.of("name", "Swift Supply Co", "contactPerson", "Riya Sharma", "email", "riya@swift.example", "phone", "+91 98765 43210", "address", "Noida"));
+            create(Entity.INVENTORY, Map.of("productId", 1, "warehouseId", 1, "quantity", 18));
+            create(Entity.INVENTORY, Map.of("productId", 2, "warehouseId", 1, "quantity", 420));
+            create(Entity.ORDERS, Map.of("supplierId", 1, "productId", 1, "quantity", 100, "status", "Pending", "expectedDate", "2026-05-08"));
+            create(Entity.SHIPMENTS, Map.of("orderId", 1, "trackingNumber", "LGW-88342", "carrier", "BlueDart", "status", "Shipped", "origin", "Delhi", "destination", "Mumbai", "shipDate", "2026-05-01", "deliveryDate", "2026-05-04"));
+        }
+
+        public boolean validAdmin(String username, String password) throws Exception {
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement("SELECT password_hash FROM admin_users WHERE username = ?")) {
+                ps.setString(1, username);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() && Objects.equals(rs.getString(1), hash(password));
+                }
+            }
+        }
+
+        public List<Map<String, Object>> list(Entity entity, String search, String status) throws Exception {
+            StringBuilder sql = new StringBuilder("SELECT * FROM " + entity.table);
+            List<Object> params = new ArrayList<>();
+            List<String> where = new ArrayList<>();
+            if (search != null && !search.isBlank()) {
+                where.add(entity.label + " LIKE ?");
+                params.add("%" + search + "%");
+            }
+            if (status != null && !status.isBlank() && entity.fields.contains("status")) {
+                where.add("status = ?");
+                params.add(status);
+            }
+            if (!where.isEmpty()) {
+                sql.append(" WHERE ").append(String.join(" AND ", where));
+            }
+            sql.append(" ORDER BY id DESC");
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement(sql.toString())) {
+                for (int i = 0; i < params.size(); i++) {
+                    ps.setObject(i + 1, params.get(i));
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rows(rs);
+                }
+            }
+        }
+
+        public Map<String, Object> create(Entity entity, Map<String, Object> body) throws Exception {
+            validate(entity, body, false);
+            String columns = String.join(", ", entity.fields);
+            String marks = "?,".repeat(entity.fields.size());
+            marks = marks.substring(0, marks.length() - 1);
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement("INSERT INTO " + entity.table + " (" + columns + ") VALUES (" + marks + ")", Statement.RETURN_GENERATED_KEYS)) {
+                bind(ps, entity.fields, body);
+                ps.executeUpdate();
+                try (ResultSet keys = ps.getGeneratedKeys()) {
+                    keys.next();
+                    return byId(entity, keys.getInt(1));
+                }
+            }
+        }
+
+        public Map<String, Object> update(Entity entity, int id, Map<String, Object> body) throws Exception {
+            validate(entity, body, true);
+            List<String> fields = entity.fields.stream().filter(body::containsKey).toList();
+            if (fields.isEmpty()) {
+                throw new BadRequest("No valid fields");
+            }
+            String set = String.join(", ", fields.stream().map(f -> f + " = ?").toList());
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement("UPDATE " + entity.table + " SET " + set + " WHERE id = ?")) {
+                bind(ps, fields, body);
+                ps.setInt(fields.size() + 1, id);
+                ps.executeUpdate();
+                return byId(entity, id);
+            }
+        }
+
+        public void delete(Entity entity, int id) throws Exception {
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement("DELETE FROM " + entity.table + " WHERE id = ?")) {
+                ps.setInt(1, id);
+                ps.executeUpdate();
+            }
+        }
+
+        public Map<String, Object> stats() throws Exception {
+            try (Connection con = connection(); Statement st = con.createStatement()) {
+                Map<String, Object> stats = new LinkedHashMap<>();
+                stats.put("products", scalar(st, "SELECT COUNT(*) FROM products"));
+                stats.put("warehouses", scalar(st, "SELECT COUNT(*) FROM warehouses"));
+                stats.put("stock", scalar(st, "SELECT COALESCE(SUM(quantity), 0) FROM inventory"));
+                stats.put("shipments", scalar(st, "SELECT COUNT(*) FROM shipments WHERE status <> 'Delivered'"));
+                stats.put("orders", scalar(st, "SELECT COUNT(*) FROM purchase_orders WHERE status = 'Pending'"));
+                stats.put("lowStock", lowStock(con));
+                return stats;
+            }
+        }
+
+        private Map<String, Object> byId(Entity entity, int id) throws Exception {
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement("SELECT * FROM " + entity.table + " WHERE id = ?")) {
+                ps.setInt(1, id);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        throw new BadRequest("Record not found");
+                    }
+                    return row(rs);
+                }
+            }
+        }
+    }
+
+    static final class MemoryStore implements Store {
+        private final Map<Entity, List<Map<String, Object>>> data = new ConcurrentHashMap<>();
+        private final Map<Entity, Integer> ids = new ConcurrentHashMap<>();
+
+        MemoryStore() {
+            for (Entity entity : Entity.values()) {
+                data.put(entity, new ArrayList<>());
+                ids.put(entity, 0);
+            }
+            try {
+                create(Entity.PRODUCTS, Map.of("name", "Barcode Scanner", "category", "Electronics", "price", 4200, "weight", 0.6, "reorderLevel", 25));
+                create(Entity.PRODUCTS, Map.of("name", "Packing Tape", "category", "Packaging", "price", 75, "weight", 0.2, "reorderLevel", 120));
+                create(Entity.WAREHOUSES, Map.of("name", "North Hub", "location", "Delhi", "capacity", 25000, "storageType", "Ambient"));
+                create(Entity.WAREHOUSES, Map.of("name", "Cold Bay", "location", "Pune", "capacity", 8000, "storageType", "Cold"));
+                create(Entity.SUPPLIERS, Map.of("name", "Swift Supply Co", "contactPerson", "Riya Sharma", "email", "riya@swift.example", "phone", "+91 98765 43210", "address", "Noida"));
+                create(Entity.INVENTORY, Map.of("productId", 1, "warehouseId", 1, "quantity", 18));
+                create(Entity.INVENTORY, Map.of("productId", 2, "warehouseId", 1, "quantity", 420));
+                create(Entity.ORDERS, Map.of("supplierId", 1, "productId", 1, "quantity", 100, "status", "Pending", "expectedDate", "2026-05-08"));
+                create(Entity.SHIPMENTS, Map.of("orderId", 1, "trackingNumber", "LGW-88342", "carrier", "BlueDart", "status", "Shipped", "origin", "Delhi", "destination", "Mumbai", "shipDate", "2026-05-01", "deliveryDate", "2026-05-04"));
+            } catch (Exception ignored) {
+            }
+        }
+
+        public String mode() {
+            return "Running with in-memory demo data. Configure DB_URL, DB_USER, and DB_PASSWORD for MySQL.";
+        }
+
+        public boolean validAdmin(String username, String password) {
+            return "admin".equals(username) && "admin123".equals(password);
+        }
+
+        public synchronized List<Map<String, Object>> list(Entity entity, String search, String status) {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            data.get(entity).stream()
+                    .filter(row -> search == null || search.isBlank() || String.valueOf(row.getOrDefault(entity.label, "")).toLowerCase().contains(search.toLowerCase()))
+                    .filter(row -> status == null || status.isBlank() || Objects.equals(String.valueOf(row.get("status")), status))
+                    .forEach(row -> rows.add(new LinkedHashMap<>(row)));
+            return rows;
+        }
+
+        public synchronized Map<String, Object> create(Entity entity, Map<String, Object> body) {
+            validate(entity, body, false);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", ids.compute(entity, (key, value) -> value + 1));
+            for (String field : entity.fields) {
+                row.put(field, body.get(field));
+            }
+            row.put("createdAt", Instant.now().toString());
+            data.get(entity).add(0, row);
+            return new LinkedHashMap<>(row);
+        }
+
+        public synchronized Map<String, Object> update(Entity entity, int id, Map<String, Object> body) {
+            validate(entity, body, true);
+            Map<String, Object> row = data.get(entity).stream().filter(item -> number(item.get("id")) == id).findFirst().orElseThrow(() -> new BadRequest("Record not found"));
+            for (String field : entity.fields) {
+                if (body.containsKey(field)) {
+                    row.put(field, body.get(field));
+                }
+            }
+            return new LinkedHashMap<>(row);
+        }
+
+        public synchronized void delete(Entity entity, int id) {
+            data.get(entity).removeIf(row -> number(row.get("id")) == id);
+        }
+
+        public synchronized Map<String, Object> stats() {
+            Map<String, Object> stats = new LinkedHashMap<>();
+            stats.put("products", data.get(Entity.PRODUCTS).size());
+            stats.put("warehouses", data.get(Entity.WAREHOUSES).size());
+            stats.put("stock", data.get(Entity.INVENTORY).stream().mapToInt(row -> number(row.get("quantity"))).sum());
+            stats.put("shipments", data.get(Entity.SHIPMENTS).stream().filter(row -> !"Delivered".equals(row.get("status"))).count());
+            stats.put("orders", data.get(Entity.ORDERS).stream().filter(row -> "Pending".equals(row.get("status"))).count());
+            stats.put("lowStock", lowStockMemory());
+            return stats;
+        }
+
+        private List<Map<String, Object>> lowStockMemory() {
+            List<Map<String, Object>> alerts = new ArrayList<>();
+            for (Map<String, Object> inv : data.get(Entity.INVENTORY)) {
+                int productId = number(inv.get("productId"));
+                Map<String, Object> product = data.get(Entity.PRODUCTS).stream().filter(p -> number(p.get("id")) == productId).findFirst().orElse(null);
+                if (product != null && number(inv.get("quantity")) <= number(product.get("reorderLevel"))) {
+                    alerts.add(Map.of("product", product.get("name"), "quantity", inv.get("quantity"), "reorderLevel", product.get("reorderLevel")));
+                }
+            }
+            return alerts;
+        }
+    }
+
+    static final class Json {
+        static Map<String, Object> parseObject(String json) {
+            Parser parser = new Parser(json);
+            Object value = parser.parseValue();
+            if (!(value instanceof Map<?, ?> map)) {
+                throw new BadRequest("Expected JSON object");
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                result.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+            return result;
+        }
+
+        static String stringify(Object value) {
+            if (value == null) return "null";
+            if (value instanceof String text) return "\"" + escape(text) + "\"";
+            if (value instanceof Number || value instanceof Boolean) return String.valueOf(value);
+            if (value instanceof Map<?, ?> map) {
+                List<String> parts = new ArrayList<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    parts.add(stringify(String.valueOf(entry.getKey())) + ":" + stringify(entry.getValue()));
+                }
+                return "{" + String.join(",", parts) + "}";
+            }
+            if (value instanceof Iterable<?> list) {
+                List<String> parts = new ArrayList<>();
+                for (Object item : list) {
+                    parts.add(stringify(item));
+                }
+                return "[" + String.join(",", parts) + "]";
+            }
+            return stringify(String.valueOf(value));
+        }
+
+        private static String escape(String text) {
+            return text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+        }
+    }
+
+    static final class Parser {
+        private final String text;
+        private int pos;
+
+        Parser(String text) {
+            this.text = text == null || text.isBlank() ? "{}" : text;
+        }
+
+        Object parseValue() {
+            skip();
+            if (peek() == '{') return object();
+            if (peek() == '[') return array();
+            if (peek() == '"') return string();
+            if (starts("true")) { pos += 4; return true; }
+            if (starts("false")) { pos += 5; return false; }
+            if (starts("null")) { pos += 4; return null; }
+            return number();
+        }
+
+        private Map<String, Object> object() {
+            expect('{');
+            Map<String, Object> map = new LinkedHashMap<>();
+            skip();
+            if (peek() == '}') { pos++; return map; }
+            while (true) {
+                String key = string();
+                skip();
+                expect(':');
+                map.put(key, parseValue());
+                skip();
+                if (peek() == '}') { pos++; return map; }
+                expect(',');
+            }
+        }
+
+        private List<Object> array() {
+            expect('[');
+            List<Object> list = new ArrayList<>();
+            skip();
+            if (peek() == ']') { pos++; return list; }
+            while (true) {
+                list.add(parseValue());
+                skip();
+                if (peek() == ']') { pos++; return list; }
+                expect(',');
+            }
+        }
+
+        private String string() {
+            expect('"');
+            StringBuilder sb = new StringBuilder();
+            while (pos < text.length()) {
+                char c = text.charAt(pos++);
+                if (c == '"') return sb.toString();
+                if (c == '\\') {
+                    char next = text.charAt(pos++);
+                    sb.append(next == 'n' ? '\n' : next == 'r' ? '\r' : next == 't' ? '\t' : next);
+                } else {
+                    sb.append(c);
+                }
+            }
+            throw new BadRequest("Invalid string");
+        }
+
+        private Number number() {
+            int start = pos;
+            while (pos < text.length() && "-0123456789.".indexOf(text.charAt(pos)) >= 0) pos++;
+            String raw = text.substring(start, pos);
+            if (raw.isBlank()) throw new BadRequest("Invalid JSON");
+            return raw.contains(".") ? new BigDecimal(raw) : Integer.parseInt(raw);
+        }
+
+        private boolean starts(String value) {
+            return text.startsWith(value, pos);
+        }
+
+        private char peek() {
+            skip();
+            return pos < text.length() ? text.charAt(pos) : '\0';
+        }
+
+        private void expect(char c) {
+            skip();
+            if (pos >= text.length() || text.charAt(pos) != c) {
+                throw new BadRequest("Expected " + c);
+            }
+            pos++;
+        }
+
+        private void skip() {
+            while (pos < text.length() && Character.isWhitespace(text.charAt(pos))) pos++;
+        }
+    }
+
+    private static void validate(Entity entity, Map<String, Object> body, boolean partial) {
+        for (String field : entity.fields) {
+            if (!partial && !body.containsKey(field)) {
+                throw new BadRequest("Missing field: " + field);
+            }
+        }
+        for (String field : List.of("price", "weight", "reorderLevel", "capacity", "quantity", "productId", "warehouseId", "supplierId", "orderId", "shipmentId")) {
+            if (body.containsKey(field) && body.get(field) != null && number(body.get(field)) < 0) {
+                throw new BadRequest(field + " cannot be negative");
+            }
+        }
+        if (body.containsKey("email") && body.get("email") != null && !String.valueOf(body.get("email")).contains("@")) {
+            throw new BadRequest("Invalid email");
+        }
+        if (entity.fields.contains("status") && body.containsKey("status") && String.valueOf(body.get("status")).isBlank()) {
+            throw new BadRequest("Status is required");
+        }
+    }
+
+    private static void bind(PreparedStatement ps, List<String> fields, Map<String, Object> body) throws SQLException {
+        for (int i = 0; i < fields.size(); i++) {
+            ps.setObject(i + 1, body.get(fields.get(i)));
+        }
+    }
+
+    private static List<Map<String, Object>> rows(ResultSet rs) throws SQLException {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        while (rs.next()) {
+            rows.add(row(rs));
+        }
+        return rows;
+    }
+
+    private static Map<String, Object> row(ResultSet rs) throws SQLException {
+        Map<String, Object> row = new LinkedHashMap<>();
+        int count = rs.getMetaData().getColumnCount();
+        for (int i = 1; i <= count; i++) {
+            Object value = rs.getObject(i);
+            if (value instanceof BigDecimal decimal) {
+                value = decimal.stripTrailingZeros();
+            }
+            row.put(rs.getMetaData().getColumnLabel(i), value);
+        }
+        return row;
+    }
+
+    private static long scalar(Statement st, String sql) throws SQLException {
+        try (ResultSet rs = st.executeQuery(sql)) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    private static List<Map<String, Object>> lowStock(Connection con) throws SQLException {
+        String sql = "SELECT p.name AS product, i.quantity, p.reorderLevel FROM inventory i JOIN products p ON p.id = i.productId WHERE i.quantity <= p.reorderLevel ORDER BY i.quantity ASC";
+        try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+            return rows(rs);
+        }
+    }
+
+    private static String requiredText(Map<String, Object> body, String field) {
+        String value = String.valueOf(body.getOrDefault(field, "")).trim();
+        if (value.isBlank()) {
+            throw new BadRequest("Missing field: " + field);
+        }
+        return value;
+    }
+
+    private static int parseId(String raw) {
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException ex) {
+            throw new BadRequest("Invalid id");
+        }
+    }
+
+    private static int number(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return Integer.parseInt(String.valueOf(value));
+    }
+
+    private static String query(HttpExchange exchange, String key) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null) return null;
+        for (String part : query.split("&")) {
+            String[] pair = part.split("=", 2);
+            if (pair.length == 2 && pair[0].equals(key)) {
+                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
+            }
+        }
+        return null;
+    }
+
+    private static void requireAuth(HttpExchange exchange) {
+        if (currentUser(exchange).isEmpty()) {
+            throw new Unauthorized();
+        }
+    }
+
+    private static Optional<String> currentUser(HttpExchange exchange) {
+        List<String> cookies = exchange.getRequestHeaders().getOrDefault("Cookie", List.of());
+        for (String header : cookies) {
+            for (String cookie : header.split(";")) {
+                String[] parts = cookie.trim().split("=", 2);
+                if (parts.length == 2 && "LWSESSION".equals(parts[0]) && sessions.containsKey(parts[1])) {
+                    return Optional.of(parts[1]);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static String token() {
+        byte[] bytes = new byte[32];
+        random.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private static String hash(String password) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hashed = digest.digest(("logiware:" + password).getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(hashed);
+    }
+
+    private static String readBody(HttpExchange exchange) throws IOException {
+        try (InputStream is = exchange.getRequestBody()) {
+            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static void json(HttpExchange exchange, int status, Object body) throws IOException {
+        cors(exchange);
+        byte[] bytes = Json.stringify(body).getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    private static void cors(HttpExchange exchange) {
+        Headers headers = exchange.getResponseHeaders();
+        headers.set("Access-Control-Allow-Origin", "http://localhost:8080");
+        headers.set("Access-Control-Allow-Credentials", "true");
+        headers.set("Access-Control-Allow-Headers", "Content-Type");
+        headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+    }
+
+    private static String contentType(Path path) {
+        String file = path.getFileName().toString();
+        if (file.endsWith(".css")) return "text/css";
+        if (file.endsWith(".js")) return "application/javascript";
+        if (file.endsWith(".svg")) return "image/svg+xml";
+        return "text/html";
+    }
+
+    static final class BadRequest extends RuntimeException {
+        BadRequest(String message) {
+            super(message);
+        }
+    }
+
+    static final class Unauthorized extends RuntimeException {
+    }
+}
