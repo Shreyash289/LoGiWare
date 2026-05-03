@@ -93,7 +93,7 @@ module.exports = async function handler(req, res) {
       return send(res, 200, await routingPayload());
     }
 
-    if (path === "/api/insights" && req.method === "GET") {
+    if ((path === "/api/insights" || path === "/api/insghts") && req.method === "GET") {
       return send(res, 200, await insightsPayload());
     }
 

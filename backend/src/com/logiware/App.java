@@ -119,7 +119,7 @@ public class App {
                 json(exchange, 200, routingPayload());
                 return;
             }
-            if ("/api/insights".equals(path) && "GET".equals(method)) {
+            if (("/api/insights".equals(path) || "/api/insghts".equals(path)) && "GET".equals(method)) {
                 json(exchange, 200, insightsPayload());
                 return;
             }
