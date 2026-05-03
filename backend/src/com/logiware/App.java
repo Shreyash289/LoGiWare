@@ -72,6 +72,7 @@ public class App {
         private void route(HttpExchange exchange) throws Exception {
             String method = exchange.getRequestMethod();
             String path = exchange.getRequestURI().getPath();
+            String normalizedPath = (path.endsWith("/") && path.length() > 1) ? path.substring(0, path.length() - 1) : path;
 
             if ("OPTIONS".equals(method)) {
                 cors(exchange);
@@ -79,7 +80,7 @@ public class App {
                 return;
             }
 
-            if ("/api/login".equals(path) && "POST".equals(method)) {
+            if ("/api/login".equals(normalizedPath) && "POST".equals(method)) {
                 Map<String, Object> body = Json.parseObject(readBody(exchange));
                 String username = requiredText(body, "username");
                 String password = requiredText(body, "password");
@@ -94,7 +95,7 @@ public class App {
                 return;
             }
 
-            if ("/api/logout".equals(path) && "POST".equals(method)) {
+            if ("/api/logout".equals(normalizedPath) && "POST".equals(method)) {
                 currentUser(exchange).ifPresent(token -> sessions.remove(token));
                 exchange.getResponseHeaders().add("Set-Cookie", "LWSESSION=; Max-Age=0; Path=/");
                 json(exchange, 200, Map.of("ok", true));
@@ -103,36 +104,36 @@ public class App {
 
             requireAuth(exchange);
 
-            if ("/api/me".equals(path) && "GET".equals(method)) {
+            if ("/api/me".equals(normalizedPath) && "GET".equals(method)) {
                 json(exchange, 200, Map.of("user", "admin"));
                 return;
             }
-            if ("/api/stats".equals(path) && "GET".equals(method)) {
+            if ("/api/stats".equals(normalizedPath) && "GET".equals(method)) {
                 json(exchange, 200, store.stats());
                 return;
             }
-            if ("/api/forecast".equals(path) && "GET".equals(method)) {
+            if ("/api/forecast".equals(normalizedPath) && "GET".equals(method)) {
                 json(exchange, 200, forecastPayload());
                 return;
             }
-            if ("/api/routing".equals(path) && "GET".equals(method)) {
+            if ("/api/routing".equals(normalizedPath) && "GET".equals(method)) {
                 json(exchange, 200, routingPayload());
                 return;
             }
-            if (("/api/insights".equals(path) || "/api/insghts".equals(path)) && "GET".equals(method)) {
+            if (("/api/insights".equals(normalizedPath) || "/api/insghts".equals(normalizedPath)) && "GET".equals(method)) {
                 json(exchange, 200, insightsPayload());
                 return;
             }
-            if ("/api/rca".equals(path) && "GET".equals(method)) {
+            if ("/api/rca".equals(normalizedPath) && "GET".equals(method)) {
                 json(exchange, 200, rcaPayload());
                 return;
             }
-            if ("/api/stream".equals(path) && "GET".equals(method)) {
+            if ("/api/stream".equals(normalizedPath) && "GET".equals(method)) {
                 stream(exchange);
                 return;
             }
 
-            String[] parts = path.substring("/api/".length()).split("/");
+            String[] parts = normalizedPath.substring("/api/".length()).split("/");
             if (parts.length == 0 || parts[0].isBlank()) {
                 throw new BadRequest("Missing resource");
             }
