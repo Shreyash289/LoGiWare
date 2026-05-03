@@ -18,7 +18,8 @@
           <p>Inventory, orders, shipments, and returns in one fast console.</p>
           <div class="login-metrics">
             <span><strong>Live</strong> sync</span>
-            <span><strong>7</strong> modules</span>
+            <span><strong>8</strong> core modules</span>
+            <span><strong>8</strong> intelligence modules</span>
           </div>
         </div>
         <form id="loginForm" class="login-form">
@@ -95,44 +96,14 @@
             <div>
               <span id="liveState" class="live-dot">Live Sync</span>
               <h1>Warehouse command center</h1>
-              <p>Track inventory health, order flow, shipment movement, and returns from one dashboard.</p>
+              <p>Overview of stock, order flow, shipment movement, and return performance.</p>
             </div>
             <button id="quickAddBtn" class="btn btn-light">Quick Add</button>
           </div>
 
-          <div class="dashboard-switcher">
-            <button class="dash-tab active" data-dashboard-mode="all">All</button>
-            <button class="dash-tab" data-dashboard-mode="operations">Operations</button>
-            <button class="dash-tab" data-dashboard-mode="finance">Finance</button>
-            <button class="dash-tab" data-dashboard-mode="logistics">Logistics</button>
-          </div>
-
           <div id="statGrid" class="stats skeleton-grid"></div>
 
-          <div class="finance-strip">
-            <article>
-              <span>Inventory Value</span>
-              <strong id="inventoryValue">Rs 0</strong>
-              <p>Total stock cost</p>
-            </article>
-            <article>
-              <span>Pending PO Value</span>
-              <strong id="pendingOrderValue">Rs 0</strong>
-              <p>Open purchase exposure</p>
-            </article>
-            <article>
-              <span>Reorder Budget</span>
-              <strong id="reorderBudget">Rs 0</strong>
-              <p>Low stock recovery</p>
-            </article>
-            <article>
-              <span>Return Impact</span>
-              <strong id="returnImpact">Rs 0</strong>
-              <p>Returned stock value</p>
-            </article>
-          </div>
-
-          <div class="dashboard-grid">
+          <div class="dashboard-grid simple-grid">
             <article class="panel chart-panel">
               <div class="panel-head">
                 <div>
@@ -158,19 +129,8 @@
             <article class="panel">
               <div class="panel-head">
                 <div>
-                  <h3>Warehouse Capacity</h3>
-                  <p>Usage by hub</p>
-                </div>
-                <span class="pill warn">Watch</span>
-              </div>
-              <div id="capacityList" class="progress-list"></div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-head">
-                <div>
                   <h3>Low Stock Alerts</h3>
-                  <p>Reorder required</p>
+                  <p>Action required</p>
                 </div>
                 <span class="pill danger">Alert</span>
               </div>
@@ -180,12 +140,23 @@
             <article class="panel">
               <div class="panel-head">
                 <div>
-                  <h3>Top Products</h3>
-                  <p>Demo insights</p>
+                  <h3>Pending Orders</h3>
+                  <p>Needs approval/review</p>
                 </div>
-                <span class="pill info">Rank</span>
+                <span class="pill warn">Queue</span>
               </div>
-              <div id="topProducts" class="rank-list"></div>
+              <div id="pendingOrders" class="smart-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Warehouse Capacity</h3>
+                  <p>Usage by hub</p>
+                </div>
+                <span class="pill info">Utilization</span>
+              </div>
+              <div id="capacityList" class="progress-list"></div>
             </article>
 
             <article class="panel">
@@ -197,215 +168,6 @@
                 <span class="pill ok">Now</span>
               </div>
               <div id="activityList" class="timeline"></div>
-            </article>
-
-            <article class="panel finance-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Money Planner</h3>
-                  <p>Instant cost handling</p>
-                </div>
-                <button id="openCalculatorBtn" class="btn btn-secondary">Calc</button>
-              </div>
-              <div id="moneyInsights" class="money-list"></div>
-            </article>
-
-            <article class="panel finance-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Operational Score</h3>
-                  <p>Presentation metrics</p>
-                </div>
-                <span class="pill ok">Smart</span>
-              </div>
-              <div id="scoreBoard" class="score-board"></div>
-            </article>
-
-            <article class="panel wide-panel ops-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Warehouse Digital Twin</h3>
-                  <p>Zones A, B, C spatial view</p>
-                </div>
-                <span class="pill info">Twin</span>
-              </div>
-              <div id="warehouseTwin" class="twin-grid"></div>
-            </article>
-
-            <article class="panel ops-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Order Routing</h3>
-                  <p>Best warehouse suggestion</p>
-                </div>
-                <span class="pill ok">Smart</span>
-              </div>
-              <div id="orderRouting" class="smart-list"></div>
-            </article>
-
-            <article class="panel logistics-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Failure Prediction</h3>
-                  <p>Delay and return risk</p>
-                </div>
-                <span class="pill warn">Risk</span>
-              </div>
-              <div id="failurePrediction" class="smart-list"></div>
-            </article>
-
-            <article class="panel wide-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Business Insights</h3>
-                  <p>Text analytics from live data</p>
-                </div>
-                <span class="pill info">AI</span>
-              </div>
-              <div id="businessInsights" class="insight-grid"></div>
-            </article>
-
-            <article class="panel ops-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Auto-Reorder Simulation</h3>
-                  <p>Draft PO suggestions</p>
-                </div>
-                <button id="simulateReorderBtn" class="btn btn-secondary">Run</button>
-              </div>
-              <div id="autoReorder" class="smart-list"></div>
-            </article>
-
-            <article class="panel ops-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Root Cause Analysis</h3>
-                  <p>Why stock is low</p>
-                </div>
-                <span class="pill warn">RCA</span>
-              </div>
-              <div id="rootCause" class="smart-list"></div>
-            </article>
-
-            <article class="panel wide-panel ops-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Scenario Testing</h3>
-                  <p>What if demand doubles?</p>
-                </div>
-                <button id="scenarioBtn" class="btn btn-secondary">Double Demand</button>
-              </div>
-              <div id="scenarioResult" class="scenario-grid"></div>
-            </article>
-
-            <article class="panel logistics-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Live System Status</h3>
-                  <p>DB, server, API response</p>
-                </div>
-                <span class="pill ok">Online</span>
-              </div>
-              <div id="systemStatus" class="smart-list"></div>
-            </article>
-
-            <article class="panel wide-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Smart Query Builder</h3>
-                  <p>SQL abstraction demo</p>
-                </div>
-                <span class="pill info">SQL</span>
-              </div>
-              <div id="queryBuilder" class="query-builder"></div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Data Versioning</h3>
-                  <p>Recent value changes</p>
-                </div>
-                <span class="pill info">Audit</span>
-              </div>
-              <div id="versionLog" class="smart-list"></div>
-            </article>
-
-            <article class="panel ops-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Forecast</h3>
-                  <p>Future stock levels</p>
-                </div>
-                <span class="pill ok">Predict</span>
-              </div>
-              <div id="forecastPanel" class="smart-list"></div>
-            </article>
-
-            <article class="panel logistics-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>AI Recommendations</h3>
-                  <p>Suggested actions</p>
-                </div>
-                <span class="pill info">Guide</span>
-              </div>
-              <div id="recommendations" class="smart-list"></div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Feature Toggles</h3>
-                  <p>Plugin-style controls</p>
-                </div>
-                <span class="pill ok">Plugin</span>
-              </div>
-              <div id="featureToggles" class="toggle-list"></div>
-            </article>
-
-            <article class="panel logistics-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Route Optimization</h3>
-                  <p>Simulated delivery path</p>
-                </div>
-                <span class="pill ok">Route</span>
-              </div>
-              <div id="routeOptimization" class="route-map"></div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Collaboration</h3>
-                  <p>Live edit indicator</p>
-                </div>
-                <span class="pill info">Team</span>
-              </div>
-              <div id="collaborationPanel" class="smart-list"></div>
-            </article>
-
-            <article class="panel wide-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Data Consistency</h3>
-                  <p>Relation checker</p>
-                </div>
-                <span class="pill warn">DBMS</span>
-              </div>
-              <div id="consistencyChecker" class="insight-grid"></div>
-            </article>
-
-            <article class="panel wide-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>Relationship Explorer</h3>
-                  <p>Product to inventory, orders, shipments</p>
-                </div>
-                <span class="pill info">ER</span>
-              </div>
-              <div id="relationshipExplorer" class="relationship-map"></div>
             </article>
           </div>
         </section>
@@ -454,6 +216,19 @@
             </div>
           </div>
         </section>
+
+        <section id="advanced" class="page">
+          <div class="module-header advanced-header">
+            <div>
+              <h3 id="advancedTitle">Advanced Intelligence</h3>
+              <p id="advancedDescription">Run analysis modules powered by backend APIs.</p>
+            </div>
+            <div class="module-actions">
+              <button id="advancedRunBtn" class="btn btn-primary">Run Analysis</button>
+            </div>
+          </div>
+          <div id="advancedContent" class="advanced-content"></div>
+        </section>
       </section>
 
       <button id="fabBtn" class="fab" title="Quick add">+</button>
@@ -483,52 +258,12 @@
       </section>
     </div>
 
-    <div id="calculatorModal" class="modal-backdrop hidden">
-      <section class="modal calc-modal">
-        <div class="modal-head">
-          <div>
-            <span class="eyebrow">Finance</span>
-            <h3>Logistics Cost Calculator</h3>
-          </div>
-          <button id="closeCalculator" class="icon-button">x</button>
-        </div>
-        <div class="calc-grid">
-          <label>
-            <span>Product Cost</span>
-            <input id="calcCost" type="number" value="1000" min="0" />
-          </label>
-          <label>
-            <span>Quantity</span>
-            <input id="calcQty" type="number" value="10" min="0" />
-          </label>
-          <label>
-            <span>Shipping</span>
-            <input id="calcShipping" type="number" value="500" min="0" />
-          </label>
-          <label>
-            <span>Tax %</span>
-            <input id="calcTax" type="number" value="18" min="0" />
-          </label>
-          <label>
-            <span>Discount %</span>
-            <input id="calcDiscount" type="number" value="5" min="0" />
-          </label>
-          <label>
-            <span>Margin %</span>
-            <input id="calcMargin" type="number" value="20" min="0" />
-          </label>
-        </div>
-        <div id="calcResult" class="calc-result"></div>
-      </section>
-    </div>
-
     <div id="notificationMenu" class="menu notice-menu hidden">
       <strong>Notifications</strong>
       <p>Low stock requires attention.</p>
       <p>Shipment sync is active.</p>
     </div>
 
-    <div id="chartTip" class="chart-tip hidden"></div>
     <script src="/app.js"></script>
   </body>
 </html>

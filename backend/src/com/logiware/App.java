@@ -111,6 +111,22 @@ public class App {
                 json(exchange, 200, store.stats());
                 return;
             }
+            if ("/api/forecast".equals(path) && "GET".equals(method)) {
+                json(exchange, 200, forecastPayload());
+                return;
+            }
+            if ("/api/routing".equals(path) && "GET".equals(method)) {
+                json(exchange, 200, routingPayload());
+                return;
+            }
+            if ("/api/insights".equals(path) && "GET".equals(method)) {
+                json(exchange, 200, insightsPayload());
+                return;
+            }
+            if ("/api/rca".equals(path) && "GET".equals(method)) {
+                json(exchange, 200, rcaPayload());
+                return;
+            }
             if ("/api/stream".equals(path) && "GET".equals(method)) {
                 stream(exchange);
                 return;
@@ -160,6 +176,165 @@ public class App {
                     Thread.sleep(5000);
                 }
             }
+        }
+
+        private Map<String, Object> analyticsData() throws Exception {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("products", store.list(Entity.PRODUCTS, null, null));
+            data.put("warehouses", store.list(Entity.WAREHOUSES, null, null));
+            data.put("inventory", store.list(Entity.INVENTORY, null, null));
+            data.put("orders", store.list(Entity.ORDERS, null, null));
+            data.put("shipments", store.list(Entity.SHIPMENTS, null, null));
+            data.put("returns", store.list(Entity.RETURNS, null, null));
+            return data;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> forecastPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> products = (List<Map<String, Object>>) analytics.get("products");
+            List<Map<String, Object>> inventory = (List<Map<String, Object>>) analytics.get("inventory");
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            List<Map<String, Object>> shipments = (List<Map<String, Object>>) analytics.get("shipments");
+            List<Map<String, Object>> returns = (List<Map<String, Object>>) analytics.get("returns");
+            long delayed = shipments.stream().filter(item -> {
+                String status = String.valueOf(item.getOrDefault("status", "")).toLowerCase();
+                return "pending".equals(status) || "shipped".equals(status);
+            }).count();
+            int returnPct = shipments.isEmpty() ? 0 : (int) Math.round((returns.size() * 100.0) / shipments.size());
+            List<Map<String, Object>> forecast = new ArrayList<>();
+            for (Map<String, Object> product : products) {
+                int productId = number(product.get("id"));
+                int stock = inventory.stream().filter(item -> number(item.get("productId")) == productId).mapToInt(item -> number(item.get("quantity"))).sum();
+                int demand = orders.stream().filter(item -> number(item.get("productId")) == productId).mapToInt(item -> number(item.get("quantity"))).sum();
+                int projectedDemand = Math.max(1, (int) Math.round((demand * 0.65) + ((delayed + returnPct) * 0.4)));
+                int projectedStock = Math.max(0, stock - projectedDemand);
+                int reorderLevel = number(product.get("reorderLevel"));
+                int reorderQty = projectedStock <= reorderLevel ? Math.max((reorderLevel * 2) - projectedStock, 1) : 0;
+                String risk = projectedStock <= reorderLevel ? "High" : projectedStock <= (int) (reorderLevel * 1.5) ? "Medium" : "Low";
+                forecast.add(Map.of(
+                        "product", String.valueOf(product.get("name")),
+                        "projectedDemand", projectedDemand,
+                        "projectedStock", projectedStock,
+                        "reorderLevel", reorderLevel,
+                        "reorderQty", reorderQty,
+                        "risk", risk
+                ));
+            }
+            forecast.sort((a, b) -> Integer.compare(number(b.get("reorderQty")), number(a.get("reorderQty"))));
+            return Map.of("generatedAt", Instant.now().toString(), "forecast", forecast);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> routingPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> warehouses = (List<Map<String, Object>>) analytics.get("warehouses");
+            List<Map<String, Object>> inventory = (List<Map<String, Object>>) analytics.get("inventory");
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            List<Map<String, Object>> products = (List<Map<String, Object>>) analytics.get("products");
+            Map<Integer, String> productNames = new HashMap<>();
+            for (Map<String, Object> product : products) {
+                productNames.put(number(product.get("id")), String.valueOf(product.get("name")));
+            }
+            List<Map<String, Object>> routes = new ArrayList<>();
+            orders.stream().filter(order -> "pending".equalsIgnoreCase(String.valueOf(order.get("status")))).limit(6).forEach(order -> {
+                int productId = number(order.get("productId"));
+                int required = number(order.get("quantity"));
+                Map<String, Object> bestInventory = inventory.stream()
+                        .filter(item -> number(item.get("productId")) == productId && number(item.get("quantity")) > 0)
+                        .max((a, b) -> Integer.compare(number(a.get("quantity")), number(b.get("quantity"))))
+                        .orElse(null);
+                Map<String, Object> warehouse = null;
+                if (bestInventory != null) {
+                    int whId = number(bestInventory.get("warehouseId"));
+                    warehouse = warehouses.stream().filter(item -> number(item.get("id")) == whId).findFirst().orElse(null);
+                }
+                routes.add(Map.of(
+                        "orderRef", "Order #" + order.get("id") + " (" + productNames.getOrDefault(productId, "Product " + productId) + ")",
+                        "warehouse", warehouse != null ? String.valueOf(warehouse.get("name")) : "No feasible warehouse",
+                        "location", warehouse != null ? String.valueOf(warehouse.get("location")) : "N/A",
+                        "available", bestInventory != null ? number(bestInventory.get("quantity")) : 0,
+                        "required", required,
+                        "reason", bestInventory != null ? (number(bestInventory.get("quantity")) >= required ? "Sufficient stock with highest availability" : "Partial fulfillment; reorder or split suggested") : "No inventory candidates for product"
+                ));
+            });
+            List<Map<String, Object>> warehouseLoad = new ArrayList<>();
+            for (int i = 0; i < warehouses.size(); i++) {
+                Map<String, Object> warehouse = warehouses.get(i);
+                int whId = number(warehouse.get("id"));
+                int used = inventory.stream().filter(item -> number(item.get("warehouseId")) == whId).mapToInt(item -> number(item.get("quantity"))).sum();
+                int cap = Math.max(1, number(warehouse.get("capacity")));
+                warehouseLoad.add(Map.of(
+                        "code", String.valueOf((char) ('A' + i)),
+                        "name", String.valueOf(warehouse.get("name")),
+                        "utilization", Math.min(100, (int) Math.round((used * 100.0) / cap))
+                ));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "routes", routes, "warehouseLoad", warehouseLoad);
+        }
+
+        private Map<String, Object> insightsPayload() throws Exception {
+            Map<String, Object> stats = store.stats();
+            Map<String, Object> forecast = forecastPayload();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> forecastRows = (List<Map<String, Object>>) forecast.get("forecast");
+            long highRisk = forecastRows.stream().filter(item -> "High".equals(String.valueOf(item.get("risk")))).count();
+            List<String> insights = List.of(
+                    "Low stock alerts currently affect " + ((List<?>) stats.get("lowStock")).size() + " inventory lines.",
+                    "Pending orders are " + stats.get("orders") + ", while active shipments are " + stats.get("shipments") + ".",
+                    "High forecast risk products: " + highRisk + " of " + forecastRows.size() + ".",
+                    "Total stock in system is " + stats.get("stock") + ", across " + stats.get("warehouses") + " warehouses."
+            );
+            List<String> relationships = forecastRows.isEmpty() ? List.of() : List.of(
+                    String.valueOf(forecastRows.get(0).get("product")),
+                    "Projected demand " + forecastRows.get(0).get("projectedDemand"),
+                    "Projected stock " + forecastRows.get(0).get("projectedStock"),
+                    "Recommended reorder " + forecastRows.get(0).get("reorderQty")
+            );
+            return Map.of("generatedAt", Instant.now().toString(), "insights", insights, "relationships", relationships);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> rcaPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> products = (List<Map<String, Object>>) analytics.get("products");
+            List<Map<String, Object>> inventory = (List<Map<String, Object>>) analytics.get("inventory");
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            List<Map<String, Object>> shipments = (List<Map<String, Object>>) analytics.get("shipments");
+            List<Map<String, Object>> returns = (List<Map<String, Object>>) analytics.get("returns");
+            Map<Integer, Map<String, Object>> productMap = new HashMap<>();
+            for (Map<String, Object> product : products) productMap.put(number(product.get("id")), product);
+
+            List<Map<String, Object>> rootCauses = new ArrayList<>();
+            for (Map<String, Object> item : inventory) {
+                Map<String, Object> product = productMap.get(number(item.get("productId")));
+                if (product == null) continue;
+                int stock = number(item.get("quantity"));
+                int reorder = number(product.get("reorderLevel"));
+                if (stock > reorder) continue;
+                int demand = orders.stream().filter(o -> number(o.get("productId")) == number(product.get("id"))).mapToInt(o -> number(o.get("quantity"))).sum();
+                long activeShipment = shipments.stream().filter(s -> {
+                    String st = String.valueOf(s.getOrDefault("status", "")).toLowerCase();
+                    return "pending".equals(st) || "shipped".equals(st);
+                }).count();
+                long productReturns = returns.stream().filter(r -> number(r.get("productId")) == number(product.get("id"))).count();
+                String severity = activeShipment > 2 || productReturns > 1 || demand > reorder * 2 ? "high" : demand > reorder ? "medium" : "low";
+                rootCauses.add(Map.of(
+                        "title", String.valueOf(product.get("name")),
+                        "detail", "Stock " + stock + " vs reorder " + reorder + "; demand " + demand + "; return hits " + productReturns + ".",
+                        "severity", severity
+                ));
+            }
+            List<Integer> orderIds = orders.stream().map(row -> number(row.get("id"))).toList();
+            List<Map<String, Object>> consistency = List.of(
+                    Map.of("title", "Inventory relations",
+                            "detail", inventory.stream().filter(row -> !productMap.containsKey(number(row.get("productId")))).count() + " invalid row(s)",
+                            "severity", "low"),
+                    Map.of("title", "Shipment order links",
+                            "detail", shipments.stream().filter(row -> row.get("orderId") != null && !orderIds.contains(number(row.get("orderId")))).count() + " invalid row(s)",
+                            "severity", "low")
+            );
+            return Map.of("generatedAt", Instant.now().toString(), "rootCauses", rootCauses, "consistency", consistency);
         }
     }
 

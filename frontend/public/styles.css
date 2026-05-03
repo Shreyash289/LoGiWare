@@ -1691,3 +1691,40 @@ body[data-role="staff"] #quickAddBtn {
     padding: 28px;
   }
 }
+.nav-group {
+  display: grid;
+  gap: 8px;
+}
+
+.nav-group h4 {
+  margin: 4px 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.simple-grid {
+  margin-top: 18px;
+}
+
+.advanced-header {
+  margin-bottom: 16px;
+}
+
+.advanced-content {
+  display: grid;
+  gap: 16px;
+}
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 860px) {
+  .advanced-grid {
+    grid-template-columns: 1fr;
+  }
+}

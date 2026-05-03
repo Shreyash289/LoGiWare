@@ -85,6 +85,22 @@ module.exports = async function handler(req, res) {
       return send(res, 200, await stats());
     }
 
+    if (path === "/api/forecast" && req.method === "GET") {
+      return send(res, 200, await forecastPayload());
+    }
+
+    if (path === "/api/routing" && req.method === "GET") {
+      return send(res, 200, await routingPayload());
+    }
+
+    if (path === "/api/insights" && req.method === "GET") {
+      return send(res, 200, await insightsPayload());
+    }
+
+    if (path === "/api/rca" && req.method === "GET") {
+      return send(res, 200, await rcaPayload());
+    }
+
     if (path === "/api/stream" && req.method === "GET") {
       return send(res, 200, await stats());
     }
@@ -217,6 +233,139 @@ async function stats() {
     orders: memory.orders.filter((row) => row.status === "Pending").length,
     lowStock,
   };
+}
+
+async function analyticsData() {
+  const [products, warehouses, inventory, orders, shipments, returns] = await Promise.all([
+    list("products"),
+    list("warehouses"),
+    list("inventory"),
+    list("orders"),
+    list("shipments"),
+    list("returns"),
+  ]);
+  return { products, warehouses, inventory, orders, shipments, returns };
+}
+
+async function forecastPayload() {
+  const { products, inventory, orders, shipments, returns } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const delayedShipments = shipments.filter((shipment) => ["pending", "shipped"].includes(String(shipment.status || "").toLowerCase())).length;
+  const returnPct = shipments.length ? Math.round((returns.length / shipments.length) * 100) : 0;
+  const forecast = products.map((product) => {
+    const productId = Number(product.id);
+    const stock = inventory.filter((row) => Number(row.productId) === productId).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const demand = orders.filter((row) => Number(row.productId) === productId).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const projectedDemand = Math.max(1, Math.round((demand * 0.65) + ((delayedShipments + returnPct) * 0.4)));
+    const projectedStock = Math.max(0, stock - projectedDemand);
+    const reorderLevel = Number(product.reorderLevel || 0);
+    const reorderQty = projectedStock <= reorderLevel ? Math.max(reorderLevel * 2 - projectedStock, 1) : 0;
+    return {
+      product: product.name,
+      projectedDemand,
+      projectedStock,
+      reorderLevel,
+      reorderQty,
+      risk: projectedStock <= reorderLevel ? "High" : projectedStock <= reorderLevel * 1.5 ? "Medium" : "Low",
+      stockValue: Math.round(stock * Number(productMap[productId]?.price || 0)),
+    };
+  }).sort((a, b) => b.reorderQty - a.reorderQty);
+  return { generatedAt: new Date().toISOString(), forecast };
+}
+
+async function routingPayload() {
+  const { warehouses, inventory, orders, products } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const pending = orders.filter((order) => String(order.status || "").toLowerCase() === "pending").slice(0, 6);
+  const routes = pending.map((order) => {
+    const required = Number(order.quantity || 0);
+    const productId = Number(order.productId);
+    const candidates = inventory
+      .filter((row) => Number(row.productId) === productId && Number(row.quantity || 0) > 0)
+      .map((row) => {
+        const warehouse = warehouses.find((item) => Number(item.id) === Number(row.warehouseId));
+        return {
+          warehouse: warehouse?.name || `Warehouse ${row.warehouseId}`,
+          location: warehouse?.location || "Unknown",
+          available: Number(row.quantity || 0),
+        };
+      })
+      .sort((a, b) => b.available - a.available);
+    const best = candidates[0];
+    return {
+      orderRef: `Order #${order.id} (${productMap[productId]?.name || `Product ${productId}`})`,
+      warehouse: best?.warehouse || "No feasible warehouse",
+      location: best?.location || "N/A",
+      available: best?.available || 0,
+      required,
+      reason: best ? (best.available >= required ? "Sufficient stock with highest availability" : "Partial fulfillment; reorder or split suggested") : "No inventory candidates for product",
+    };
+  });
+  const warehouseLoad = warehouses.map((warehouse, index) => {
+    const used = inventory.filter((row) => Number(row.warehouseId) === Number(warehouse.id)).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const cap = Math.max(Number(warehouse.capacity || 1), 1);
+    return {
+      code: String.fromCharCode(65 + index),
+      name: warehouse.name,
+      utilization: Math.min(100, Math.round((used / cap) * 100)),
+    };
+  });
+  return { generatedAt: new Date().toISOString(), routes, warehouseLoad };
+}
+
+async function insightsPayload() {
+  const statsData = await stats();
+  const forecast = await forecastPayload();
+  const highRisk = forecast.forecast.filter((row) => row.risk === "High").length;
+  const insights = [
+    `Low stock alerts currently affect ${statsData.lowStock.length} inventory lines.`,
+    `Pending orders are ${statsData.orders}, while active shipments are ${statsData.shipments}.`,
+    `High forecast risk products: ${highRisk} of ${forecast.forecast.length}.`,
+    `Total stock in system is ${statsData.stock}, across ${statsData.warehouses} warehouses.`,
+  ];
+  const top = forecast.forecast[0];
+  const relationships = top
+    ? [top.product, `Inventory value Rs ${top.stockValue}`, `Projected demand ${top.projectedDemand}`, `Projected stock ${top.projectedStock}`, `Recommended reorder ${top.reorderQty}`]
+    : [];
+  return { generatedAt: new Date().toISOString(), insights, relationships };
+}
+
+async function rcaPayload() {
+  const { products, inventory, orders, shipments, returns } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const rootCauses = [];
+  for (const item of inventory) {
+    const product = productMap[Number(item.productId)];
+    if (!product) continue;
+    const stock = Number(item.quantity || 0);
+    const reorderLevel = Number(product.reorderLevel || 0);
+    if (stock > reorderLevel) continue;
+    const demand = orders.filter((row) => Number(row.productId) === Number(product.id)).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const shipmentDelayLoad = shipments.filter((shipment) => ["pending", "shipped"].includes(String(shipment.status || "").toLowerCase())).length;
+    const productReturns = returns.filter((row) => Number(row.productId) === Number(product.id)).length;
+    const severity = shipmentDelayLoad > 2 || productReturns > 1 || demand > reorderLevel * 2 ? "high" : demand > reorderLevel ? "medium" : "low";
+    rootCauses.push({
+      title: product.name,
+      detail: `Stock ${stock} vs reorder ${reorderLevel}; demand ${demand}; return hits ${productReturns}.`,
+      severity,
+    });
+  }
+  const orderIds = new Set(orders.map((row) => Number(row.id)));
+  const productIds = new Set(products.map((row) => Number(row.id)));
+  const warehouseIds = new Set((await list("warehouses")).map((row) => Number(row.id)));
+  const consistency = [
+    {
+      title: "Inventory relations",
+      detail: `${inventory.filter((row) => !productIds.has(Number(row.productId)) || !warehouseIds.has(Number(row.warehouseId))).length} invalid row(s)`,
+      severity: "low",
+    },
+    {
+      title: "Shipment order links",
+      detail: `${shipments.filter((row) => row.orderId && !orderIds.has(Number(row.orderId))).length} invalid row(s)`,
+      severity: "low",
+    },
+  ];
+  return { generatedAt: new Date().toISOString(), rootCauses, consistency };
 }
 
 let pool;
