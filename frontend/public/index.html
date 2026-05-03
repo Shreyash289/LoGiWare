@@ -102,6 +102,29 @@
 
           <div id="statGrid" class="stats skeleton-grid"></div>
 
+          <div class="finance-strip">
+            <article>
+              <span>Inventory Value</span>
+              <strong id="inventoryValue">Rs 0</strong>
+              <p>Total stock cost</p>
+            </article>
+            <article>
+              <span>Pending PO Value</span>
+              <strong id="pendingOrderValue">Rs 0</strong>
+              <p>Open purchase exposure</p>
+            </article>
+            <article>
+              <span>Reorder Budget</span>
+              <strong id="reorderBudget">Rs 0</strong>
+              <p>Low stock recovery</p>
+            </article>
+            <article>
+              <span>Return Impact</span>
+              <strong id="returnImpact">Rs 0</strong>
+              <p>Returned stock value</p>
+            </article>
+          </div>
+
           <div class="dashboard-grid">
             <article class="panel chart-panel">
               <div class="panel-head">
@@ -167,6 +190,28 @@
                 <span class="pill ok">Now</span>
               </div>
               <div id="activityList" class="timeline"></div>
+            </article>
+
+            <article class="panel finance-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Money Planner</h3>
+                  <p>Instant cost handling</p>
+                </div>
+                <button id="openCalculatorBtn" class="btn btn-secondary">Calc</button>
+              </div>
+              <div id="moneyInsights" class="money-list"></div>
+            </article>
+
+            <article class="panel finance-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Operational Score</h3>
+                  <p>Presentation metrics</p>
+                </div>
+                <span class="pill ok">Smart</span>
+              </div>
+              <div id="scoreBoard" class="score-board"></div>
             </article>
           </div>
         </section>
@@ -241,6 +286,45 @@
           <button id="cancelDelete" class="btn btn-secondary">Cancel</button>
           <button id="confirmDelete" class="btn btn-danger">Delete</button>
         </div>
+      </section>
+    </div>
+
+    <div id="calculatorModal" class="modal-backdrop hidden">
+      <section class="modal calc-modal">
+        <div class="modal-head">
+          <div>
+            <span class="eyebrow">Finance</span>
+            <h3>Logistics Cost Calculator</h3>
+          </div>
+          <button id="closeCalculator" class="icon-button">x</button>
+        </div>
+        <div class="calc-grid">
+          <label>
+            <span>Product Cost</span>
+            <input id="calcCost" type="number" value="1000" min="0" />
+          </label>
+          <label>
+            <span>Quantity</span>
+            <input id="calcQty" type="number" value="10" min="0" />
+          </label>
+          <label>
+            <span>Shipping</span>
+            <input id="calcShipping" type="number" value="500" min="0" />
+          </label>
+          <label>
+            <span>Tax %</span>
+            <input id="calcTax" type="number" value="18" min="0" />
+          </label>
+          <label>
+            <span>Discount %</span>
+            <input id="calcDiscount" type="number" value="5" min="0" />
+          </label>
+          <label>
+            <span>Margin %</span>
+            <input id="calcMargin" type="number" value="20" min="0" />
+          </label>
+        </div>
+        <div id="calcResult" class="calc-result"></div>
       </section>
     </div>
 

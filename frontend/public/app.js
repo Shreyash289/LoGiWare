@@ -170,6 +170,7 @@ function bindEvents() {
   $("#collapseBtn").addEventListener("click", () => app.classList.toggle("collapsed"));
   $("#themeToggle").addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   $("#quickAddBtn").addEventListener("click", () => navigate("products", true));
+  $("#openCalculatorBtn").addEventListener("click", openCalculator);
   $("#fabBtn").addEventListener("click", () => openForm());
   $("#newBtn").addEventListener("click", () => openForm());
   $("#closeModal").addEventListener("click", closeForm);
@@ -198,6 +199,13 @@ function bindEvents() {
 
   $("#cancelDelete").addEventListener("click", () => confirmModal.classList.add("hidden"));
   $("#confirmDelete").addEventListener("click", deleteConfirmed);
+  $("#closeCalculator").addEventListener("click", () => $("#calculatorModal").classList.add("hidden"));
+  $("#calculatorModal").addEventListener("click", (event) => {
+    if (event.target === $("#calculatorModal")) $("#calculatorModal").classList.add("hidden");
+  });
+  ["calcCost", "calcQty", "calcShipping", "calcTax", "calcDiscount", "calcMargin"].forEach((id) => {
+    $(`#${id}`).addEventListener("input", renderCalculator);
+  });
 
   $("#profileBtn").addEventListener("click", () => $("#profileMenu").classList.toggle("hidden"));
   $("#roleToggle").addEventListener("click", () => setRole(state.role === "admin" ? "staff" : "admin"));
@@ -212,6 +220,7 @@ function bindEvents() {
       $("#profileMenu").classList.add("hidden");
       $("#notificationMenu").classList.add("hidden");
       $("#globalResults").classList.add("hidden");
+      $("#calculatorModal").classList.add("hidden");
     }
   });
 }
@@ -277,10 +286,13 @@ async function preloadData() {
 
 function renderDashboard() {
   renderStats();
+  renderFinance();
   renderAlerts();
   renderCapacity();
   renderTopProducts();
   renderActivity();
+  renderMoneyInsights();
+  renderScoreBoard();
   drawCharts();
 }
 
@@ -326,6 +338,41 @@ function renderAlerts() {
   $("#noticeCount").textContent = alerts.length || 1;
 }
 
+function financeMetrics() {
+  const products = state.allRows.products || [];
+  const inventory = state.allRows.inventory || [];
+  const orders = state.allRows.orders || [];
+  const returns = state.allRows.returns || [];
+  const shipments = state.allRows.shipments || [];
+  const productById = Object.fromEntries(products.map((product) => [Number(product.id), product]));
+  const priceOf = (productId) => Number(productById[Number(productId)]?.price || 0);
+  const inventoryValue = inventory.reduce((sum, item) => sum + Number(item.quantity || 0) * priceOf(item.productId), 0);
+  const pendingOrderValue = orders
+    .filter((order) => String(order.status || "").toLowerCase() === "pending")
+    .reduce((sum, order) => sum + Number(order.quantity || 0) * priceOf(order.productId), 0);
+  const reorderBudget = inventory.reduce((sum, item) => {
+    const product = productById[Number(item.productId)];
+    if (!product) return sum;
+    const gap = Math.max(0, Number(product.reorderLevel || 0) - Number(item.quantity || 0));
+    return sum + gap * Number(product.price || 0);
+  }, 0);
+  const returnImpact = returns.reduce((sum, item) => sum + Number(item.quantity || 0) * priceOf(item.productId), 0);
+  const delivered = shipments.filter((shipment) => String(shipment.status || "").toLowerCase() === "delivered").length;
+  const shipmentRate = shipments.length ? Math.round((delivered / shipments.length) * 100) : 0;
+  const lowStockCount = state.stats?.lowStock?.length || 0;
+  const stockHealth = inventory.length ? Math.max(0, Math.round(((inventory.length - lowStockCount) / inventory.length) * 100)) : 100;
+  const returnRate = shipments.length ? Math.round((returns.length / shipments.length) * 100) : 0;
+  return { inventoryValue, pendingOrderValue, reorderBudget, returnImpact, shipmentRate, stockHealth, returnRate };
+}
+
+function renderFinance() {
+  const metrics = financeMetrics();
+  $("#inventoryValue").textContent = formatMoney(metrics.inventoryValue);
+  $("#pendingOrderValue").textContent = formatMoney(metrics.pendingOrderValue);
+  $("#reorderBudget").textContent = formatMoney(metrics.reorderBudget);
+  $("#returnImpact").textContent = formatMoney(metrics.returnImpact);
+}
+
 function renderCapacity() {
   const warehouses = state.allRows.warehouses || [];
   const inventoryTotal = (state.allRows.inventory || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -366,6 +413,46 @@ function renderActivity() {
   `).join("");
 }
 
+function renderMoneyInsights() {
+  const metrics = financeMetrics();
+  const inventory = state.allRows.inventory || [];
+  const avgStockValue = inventory.length ? metrics.inventoryValue / inventory.length : 0;
+  $("#moneyInsights").innerHTML = [
+    ["Avg Stock Value", formatMoney(avgStockValue), "Per inventory line"],
+    ["Cash Blocked", formatMoney(metrics.inventoryValue + metrics.pendingOrderValue), "Stock + pending PO"],
+    ["Reorder Need", formatMoney(metrics.reorderBudget), metrics.reorderBudget ? "Budget required" : "No urgent spend"],
+    ["Return Risk", `${metrics.returnRate}%`, "Returns vs shipments"],
+  ].map(([label, value, note]) => `
+    <div class="money-row">
+      <span>${label}</span>
+      <strong>${value}</strong>
+      <p>${note}</p>
+    </div>
+  `).join("");
+}
+
+function renderScoreBoard() {
+  const metrics = financeMetrics();
+  const score = Math.round((metrics.stockHealth * 0.45) + (metrics.shipmentRate * 0.35) + (Math.max(0, 100 - metrics.returnRate) * 0.2));
+  const rows = [
+    ["Stock Health", metrics.stockHealth],
+    ["Shipment Completion", metrics.shipmentRate],
+    ["Quality Score", Math.max(0, 100 - metrics.returnRate)],
+  ];
+  $("#scoreBoard").innerHTML = `
+    <div class="score-ring" style="--score:${score * 3.6}deg"><strong>${score}</strong><span>/100</span></div>
+    <div class="score-bars">
+      ${rows.map(([label, value]) => `
+        <div>
+          <span>${label}</span>
+          <div class="progress-track"><span style="width:${value}%"></span></div>
+          <b>${value}%</b>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function drawCharts() {
   const stock = Number(state.stats?.stock || 0);
   const orders = Number(state.stats?.orders || 0);
@@ -376,6 +463,35 @@ function drawCharts() {
     { label: "Shipments", value: Math.max(shipments, 1), color: "#14b8a6" },
     { label: "Returns", value: Math.max((state.allRows.returns || []).length, 1), color: "#f97316" },
   ]);
+}
+
+function openCalculator() {
+  $("#calculatorModal").classList.remove("hidden");
+  renderCalculator();
+}
+
+function renderCalculator() {
+  const cost = Number($("#calcCost").value || 0);
+  const qty = Number($("#calcQty").value || 0);
+  const shipping = Number($("#calcShipping").value || 0);
+  const tax = Number($("#calcTax").value || 0);
+  const discount = Number($("#calcDiscount").value || 0);
+  const margin = Number($("#calcMargin").value || 0);
+  const subtotal = cost * qty;
+  const discountValue = subtotal * (discount / 100);
+  const taxable = Math.max(0, subtotal - discountValue + shipping);
+  const taxValue = taxable * (tax / 100);
+  const landedCost = taxable + taxValue;
+  const suggestedSelling = landedCost * (1 + margin / 100);
+  const perUnit = qty ? landedCost / qty : 0;
+  $("#calcResult").innerHTML = `
+    <article><span>Subtotal</span><strong>${formatMoney(subtotal)}</strong></article>
+    <article><span>Discount</span><strong>${formatMoney(discountValue)}</strong></article>
+    <article><span>Tax</span><strong>${formatMoney(taxValue)}</strong></article>
+    <article><span>Landed Cost</span><strong>${formatMoney(landedCost)}</strong></article>
+    <article><span>Per Unit</span><strong>${formatMoney(perUnit)}</strong></article>
+    <article><span>Selling Target</span><strong>${formatMoney(suggestedSelling)}</strong></article>
+  `;
 }
 
 function drawLineChart(canvas, points, label) {
