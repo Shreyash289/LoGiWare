@@ -78,6 +78,8 @@ const navGroups = [
 ];
 
 const allModules = { ...coreModules, ...advancedModules };
+const routeAliases = { insghts: "insights" };
+const endpointAliases = { "/api/insghts": "/api/insights" };
 
 const state = {
   active: "dashboard",
@@ -188,8 +190,10 @@ function bindEvents() {
   });
 
   window.addEventListener("hashchange", () => {
-    const route = (window.location.hash || "#dashboard").slice(1);
+    const rawRoute = (window.location.hash || "#dashboard").slice(1);
+    const route = routeAliases[rawRoute] || rawRoute;
     if (allModules[route]) navigate(route);
+    else navigate("dashboard");
   });
 }
 
@@ -214,11 +218,13 @@ async function logout() {
 async function showApp() {
   login.classList.add("hidden");
   app.classList.remove("hidden");
-  navigate((window.location.hash || "#dashboard").slice(1));
+  const rawRoute = (window.location.hash || "#dashboard").slice(1);
+  navigate(routeAliases[rawRoute] || rawRoute);
   connectStream();
 }
 
 function navigate(route, autoOpen = false) {
+  route = routeAliases[route] || route;
   if (!allModules[route]) route = "dashboard";
   const mod = allModules[route];
   state.active = route;
@@ -545,7 +551,8 @@ function connectStream() {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const finalUrl = endpointAliases[url] || url;
+  const response = await fetch(finalUrl, {
     method: options.method || "GET",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
