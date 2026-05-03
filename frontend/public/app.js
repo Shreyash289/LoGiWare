@@ -108,7 +108,11 @@ const state = {
   sortDir: "desc",
   page: 1,
   pageSize: 10,
+  dashboardMode: "all",
+  apiMs: 0,
   activity: ["System synced", "Inventory checked", "Orders reviewed"],
+  versions: JSON.parse(localStorage.getItem("versions") || "[]"),
+  enabledFeatures: JSON.parse(localStorage.getItem("enabledFeatures") || '{"Routing":true,"Forecast":true,"RCA":true,"Digital Twin":true}'),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -171,6 +175,14 @@ function bindEvents() {
   $("#themeToggle").addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   $("#quickAddBtn").addEventListener("click", () => navigate("products", true));
   $("#openCalculatorBtn").addEventListener("click", openCalculator);
+  $("#simulateReorderBtn").addEventListener("click", () => {
+    renderAutoReorder(true);
+    toast("Draft purchase orders simulated", "success");
+  });
+  $("#scenarioBtn").addEventListener("click", () => renderScenario(true));
+  document.querySelectorAll("[data-dashboard-mode]").forEach((button) => {
+    button.addEventListener("click", () => setDashboardMode(button.dataset.dashboardMode));
+  });
   $("#fabBtn").addEventListener("click", () => openForm());
   $("#newBtn").addEventListener("click", () => openForm());
   $("#closeModal").addEventListener("click", closeForm);
@@ -268,7 +280,9 @@ function navigate(route, autoOpen = false) {
 }
 
 async function loadDashboard() {
+  const started = performance.now();
   state.stats = await api("/api/stats");
+  state.apiMs = Math.max(1, Math.round(performance.now() - started));
   await preloadData();
   renderDashboard();
 }
@@ -293,6 +307,7 @@ function renderDashboard() {
   renderActivity();
   renderMoneyInsights();
   renderScoreBoard();
+  renderInnovationPanels();
   drawCharts();
 }
 
@@ -391,13 +406,13 @@ function renderCapacity() {
 }
 
 function renderTopProducts() {
-  const products = [...(state.allRows.products || [])].slice(0, 4);
+  const products = productInsights().slice(0, 4);
   $("#topProducts").innerHTML = products.length
     ? products.map((item, index) => `
       <div class="rank-row">
         <span>${index + 1}</span>
-        <div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.category)}</p></div>
-        <b>${formatMoney(item.price)}</b>
+        <div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.category)} | Qty ${item.stock}</p></div>
+        <b>${formatMoney(item.value)}</b>
       </div>
     `).join("")
     : `<div class="empty">No products</div>`;
@@ -451,6 +466,286 @@ function renderScoreBoard() {
       `).join("")}
     </div>
   `;
+}
+
+function productInsights() {
+  const products = state.allRows.products || [];
+  const inventory = state.allRows.inventory || [];
+  const orders = state.allRows.orders || [];
+  const returns = state.allRows.returns || [];
+  return products.map((product) => {
+    const id = Number(product.id);
+    const stock = inventory.filter((item) => Number(item.productId) === id).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const ordered = orders.filter((item) => Number(item.productId) === id).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const returned = returns.filter((item) => Number(item.productId) === id).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const value = stock * Number(product.price || 0);
+    const demandScore = ordered + returned * 2 + value / 1000;
+    return { ...product, stock, ordered, returned, value, demandScore };
+  }).sort((a, b) => b.demandScore - a.demandScore);
+}
+
+function renderInnovationPanels() {
+  renderDigitalTwin();
+  renderOrderRouting();
+  renderFailurePrediction();
+  renderBusinessInsights();
+  renderAutoReorder(false);
+  renderRootCause();
+  renderScenario(false);
+  renderSystemStatus();
+  renderQueryBuilder();
+  renderVersionLog();
+  renderForecast();
+  renderRecommendations();
+  renderFeatureToggles();
+  renderRouteOptimization();
+  renderCollaboration();
+  renderConsistency();
+  renderRelationshipExplorer();
+  applyDashboardMode();
+}
+
+function warehouseUsage() {
+  const warehouses = state.allRows.warehouses || [];
+  const inventory = state.allRows.inventory || [];
+  return warehouses.map((warehouse) => {
+    const used = inventory.filter((item) => Number(item.warehouseId) === Number(warehouse.id)).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const capacity = Math.max(1, Number(warehouse.capacity || 1));
+    const percent = Math.min(100, Math.round((used / capacity) * 100));
+    return { ...warehouse, used, percent, free: Math.max(0, capacity - used) };
+  });
+}
+
+function renderDigitalTwin() {
+  const zones = warehouseUsage();
+  const fallback = ["A", "B", "C"].map((zone, index) => ({ name: `Zone ${zone}`, location: "Demo", percent: [82, 46, 18][index], used: [820, 460, 180][index], free: [180, 540, 820][index] }));
+  const items = (zones.length ? zones : fallback).slice(0, 9);
+  $("#warehouseTwin").innerHTML = items.map((zone, index) => {
+    const status = zone.percent >= 80 ? "over" : zone.percent <= 35 ? "free" : "normal";
+    return `
+      <div class="twin-cell ${status}">
+        <strong>${String.fromCharCode(65 + index)}</strong>
+        <span>${escapeHtml(zone.name)}</span>
+        <p>${zone.percent}% used</p>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderOrderRouting() {
+  const orders = (state.allRows.orders || []).filter((order) => String(order.status || "").toLowerCase() === "pending");
+  const inventory = state.allRows.inventory || [];
+  const warehouses = state.allRows.warehouses || [];
+  const suggestions = orders.slice(0, 3).map((order) => {
+    const candidates = inventory.filter((item) => Number(item.productId) === Number(order.productId) && Number(item.quantity || 0) >= Number(order.quantity || 0));
+    const best = candidates.sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
+    const warehouse = warehouses.find((item) => Number(item.id) === Number(best?.warehouseId));
+    return {
+      title: `Order #${order.id}`,
+      value: warehouse ? warehouse.name : "No warehouse with enough stock",
+      note: warehouse ? `${warehouse.location} | Available ${best.quantity}` : "Create PO or split shipment",
+      type: warehouse ? "ok" : "warn",
+    };
+  });
+  renderSmartList("#orderRouting", suggestions, "No pending orders to route");
+}
+
+function renderFailurePrediction() {
+  const shipments = state.allRows.shipments || [];
+  const returns = state.allRows.returns || [];
+  const pending = shipments.filter((item) => ["pending", "shipped"].includes(String(item.status || "").toLowerCase())).length;
+  const returnRate = shipments.length ? Math.round((returns.length / shipments.length) * 100) : 0;
+  const risk = pending > 3 || returnRate > 30 ? "High" : pending > 0 || returnRate > 10 ? "Medium" : "Low";
+  renderSmartList("#failurePrediction", [
+    { title: `${risk} delivery risk`, value: `${pending} active shipments`, note: "Based on pending/shipped load", type: risk === "High" ? "danger" : "warn" },
+    { title: "Return pattern", value: `${returnRate}%`, note: "Repeated returns increase risk", type: returnRate > 20 ? "danger" : "ok" },
+  ]);
+}
+
+function renderBusinessInsights() {
+  const metrics = financeMetrics();
+  const top = productInsights()[0];
+  const insights = [
+    `Warehouse efficiency score is ${Math.round((metrics.stockHealth + metrics.shipmentRate) / 2)}%.`,
+    metrics.returnRate ? `Returns are ${metrics.returnRate}% of shipments; inspect quality reasons.` : "Returns are controlled this cycle.",
+    top ? `${top.name} has the highest demand/value signal.` : "Add products to unlock demand insights.",
+    metrics.reorderBudget ? `Low stock recovery needs ${formatMoney(metrics.reorderBudget)}.` : "No urgent reorder budget required.",
+  ];
+  $("#businessInsights").innerHTML = insights.map((text) => `<div class="insight-card">${escapeHtml(text)}</div>`).join("");
+}
+
+function renderAutoReorder(markDraft) {
+  const items = lowStockProducts().slice(0, 4).map((item) => ({
+    title: item.name,
+    value: `${Math.max(0, item.reorderLevel - item.stock)} units`,
+    note: markDraft ? "Draft PO created in simulation" : "Click Run to simulate draft PO",
+    type: "warn",
+  }));
+  renderSmartList("#autoReorder", items, "No low-stock reorder needed");
+}
+
+function lowStockProducts() {
+  return productInsights().filter((product) => Number(product.stock || 0) <= Number(product.reorderLevel || 0));
+}
+
+function renderRootCause() {
+  const items = lowStockProducts().slice(0, 3).map((product) => {
+    const cause = product.ordered > product.stock ? "High demand" : product.reorderLevel < 20 ? "Low reorder level" : "Supplier delay or replenishment gap";
+    return { title: product.name, value: cause, note: `Stock ${product.stock}, reorder ${product.reorderLevel}`, type: "warn" };
+  });
+  renderSmartList("#rootCause", items, "No stock issue detected");
+}
+
+function renderScenario(doubleDemand) {
+  const products = productInsights();
+  const lowAfterDemand = products.filter((product) => Number(product.stock || 0) - Number(product.ordered || 0) * (doubleDemand ? 2 : 1) <= Number(product.reorderLevel || 0)).length;
+  const metrics = financeMetrics();
+  $("#scenarioResult").innerHTML = [
+    ["Demand Mode", doubleDemand ? "2x demand" : "Normal demand"],
+    ["Products At Risk", lowAfterDemand],
+    ["Extra Budget", formatMoney(doubleDemand ? metrics.reorderBudget * 2 : metrics.reorderBudget)],
+  ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+}
+
+function renderSystemStatus() {
+  renderSmartList("#systemStatus", [
+    { title: "DB Connection", value: "Connected", note: "Java JDBC backend", type: "ok" },
+    { title: "Server", value: "Running", note: "localhost:8080", type: "ok" },
+    { title: "API Response", value: `${state.apiMs} ms`, note: "/api/stats check", type: state.apiMs < 250 ? "ok" : "warn" },
+  ]);
+}
+
+function renderQueryBuilder() {
+  const table = $("#qbTable")?.value || "products";
+  const field = $("#qbField")?.value || "id";
+  const value = $("#qbValue")?.value || "";
+  const fields = ["id", ...(modules[table]?.fields || []).map(([key]) => key)];
+  const sql = `SELECT * FROM ${modules[table]?.endpoint?.replace("/api/", "") || table}${value ? ` WHERE ${field} LIKE '%${value.replaceAll("'", "''")}%'` : ""};`;
+  $("#queryBuilder").innerHTML = `
+    <select id="qbTable" onchange="renderQueryBuilder()">${Object.keys(modules).filter((key) => modules[key].endpoint).map((key) => `<option value="${key}" ${key === table ? "selected" : ""}>${modules[key].label}</option>`).join("")}</select>
+    <select id="qbField" onchange="renderQueryBuilder()">${fields.map((key) => `<option ${key === field ? "selected" : ""}>${key}</option>`).join("")}</select>
+    <input id="qbValue" value="${escapeAttr(value)}" oninput="renderQueryBuilder()" placeholder="Filter value" />
+    <code>${escapeHtml(sql)}</code>
+  `;
+}
+window.renderQueryBuilder = renderQueryBuilder;
+
+function renderVersionLog() {
+  renderSmartList("#versionLog", state.versions.slice(0, 4).map((item) => ({
+    title: item.module,
+    value: item.field,
+    note: `${item.oldValue} -> ${item.newValue}`,
+    type: "info",
+  })), "No edits tracked yet");
+}
+
+function renderForecast() {
+  const items = productInsights().slice(0, 4).map((product) => {
+    const future = Math.max(0, product.stock - Math.max(1, product.ordered || 2));
+    return { title: product.name, value: `${future} units`, note: future <= product.reorderLevel ? "Below reorder soon" : "Healthy forecast", type: future <= product.reorderLevel ? "warn" : "ok" };
+  });
+  renderSmartList("#forecastPanel", items, "Add inventory to forecast");
+}
+
+function renderRecommendations() {
+  const metrics = financeMetrics();
+  const top = productInsights()[0];
+  const recs = [
+    top ? { title: "Increase stock", value: top.name, note: "Highest demand/value product", type: "info" } : null,
+    metrics.returnRate > 10 ? { title: "Inspect returns", value: `${metrics.returnRate}% rate`, note: "Review reasons in Returns", type: "warn" } : { title: "Return control", value: "Stable", note: "No urgent return action", type: "ok" },
+    metrics.stockHealth < 80 ? { title: "Rebalance stock", value: `${metrics.stockHealth}% health`, note: "Move stock or reorder", type: "warn" } : { title: "Inventory healthy", value: `${metrics.stockHealth}%`, note: "Stock coverage is good", type: "ok" },
+  ].filter(Boolean);
+  renderSmartList("#recommendations", recs);
+}
+
+function renderFeatureToggles() {
+  $("#featureToggles").innerHTML = Object.entries(state.enabledFeatures).map(([name, enabled]) => `
+    <button class="toggle-row ${enabled ? "enabled" : ""}" onclick="toggleFeature('${name}')">
+      <span>${escapeHtml(name)}</span><strong>${enabled ? "ON" : "OFF"}</strong>
+    </button>
+  `).join("");
+}
+window.toggleFeature = (name) => {
+  state.enabledFeatures[name] = !state.enabledFeatures[name];
+  localStorage.setItem("enabledFeatures", JSON.stringify(state.enabledFeatures));
+  renderFeatureToggles();
+};
+
+function renderRouteOptimization() {
+  const shipment = (state.allRows.shipments || [])[0];
+  const origin = shipment?.origin || "Warehouse";
+  const destination = shipment?.destination || "Customer";
+  $("#routeOptimization").innerHTML = `
+    <div class="route-node">${escapeHtml(origin)}</div>
+    <div class="route-line"><span></span></div>
+    <div class="route-node">Hub</div>
+    <div class="route-line"><span></span></div>
+    <div class="route-node">${escapeHtml(destination)}</div>
+    <p>Optimized path selects shortest simulated hub route.</p>
+  `;
+}
+
+function renderCollaboration() {
+  const product = productInsights()[0];
+  renderSmartList("#collaborationPanel", [
+    { title: "Live editor", value: "Staff-02", note: product ? `Editing ${product.name}` : "Watching dashboard", type: "info" },
+    { title: "Session", value: "2 users online", note: "Real-time collaboration indicator", type: "ok" },
+  ]);
+}
+
+function renderConsistency() {
+  const productIds = new Set((state.allRows.products || []).map((item) => Number(item.id)));
+  const warehouseIds = new Set((state.allRows.warehouses || []).map((item) => Number(item.id)));
+  const inventoryIssues = (state.allRows.inventory || []).filter((item) => !productIds.has(Number(item.productId)) || !warehouseIds.has(Number(item.warehouseId))).length;
+  const orderIssues = (state.allRows.orders || []).filter((item) => !productIds.has(Number(item.productId))).length;
+  const shipmentIssues = (state.allRows.shipments || []).filter((item) => item.orderId && !(state.allRows.orders || []).some((order) => Number(order.id) === Number(item.orderId))).length;
+  $("#consistencyChecker").innerHTML = [
+    ["Inventory relations", inventoryIssues ? `${inventoryIssues} issue(s)` : "Valid"],
+    ["Order products", orderIssues ? `${orderIssues} issue(s)` : "Valid"],
+    ["Shipment orders", shipmentIssues ? `${shipmentIssues} issue(s)` : "Valid"],
+  ].map(([label, value]) => `<div class="insight-card"><strong>${label}</strong><p>${value}</p></div>`).join("");
+}
+
+function renderRelationshipExplorer() {
+  const product = productInsights()[0];
+  if (!product) {
+    $("#relationshipExplorer").innerHTML = `<div class="empty">Add a product to explore relations</div>`;
+    return;
+  }
+  const inventory = (state.allRows.inventory || []).filter((item) => Number(item.productId) === Number(product.id));
+  const orders = (state.allRows.orders || []).filter((item) => Number(item.productId) === Number(product.id));
+  const returns = (state.allRows.returns || []).filter((item) => Number(item.productId) === Number(product.id));
+  $("#relationshipExplorer").innerHTML = `
+    <div class="relation-node main">${escapeHtml(product.name)}</div>
+    <div class="relation-node">Inventory rows: ${inventory.length}</div>
+    <div class="relation-node">Orders: ${orders.length}</div>
+    <div class="relation-node">Returns: ${returns.length}</div>
+    <div class="relation-node">Stock value: ${formatMoney(product.value)}</div>
+  `;
+}
+
+function renderSmartList(selector, items, empty = "No data") {
+  $(selector).innerHTML = items?.length
+    ? items.map((item) => `
+      <div class="smart-row ${item.type || "info"}">
+        <div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.note || "")}</p></div>
+        <span>${escapeHtml(item.value)}</span>
+      </div>
+    `).join("")
+    : `<div class="empty">${empty}</div>`;
+}
+
+function setDashboardMode(mode) {
+  state.dashboardMode = mode;
+  document.querySelectorAll("[data-dashboard-mode]").forEach((button) => button.classList.toggle("active", button.dataset.dashboardMode === mode));
+  applyDashboardMode();
+}
+
+function applyDashboardMode() {
+  document.querySelectorAll(".ops-panel,.finance-panel,.logistics-panel").forEach((panel) => panel.classList.remove("mode-hidden"));
+  if (state.dashboardMode === "operations") document.querySelectorAll(".finance-panel,.logistics-panel").forEach((panel) => panel.classList.add("mode-hidden"));
+  if (state.dashboardMode === "finance") document.querySelectorAll(".ops-panel,.logistics-panel").forEach((panel) => panel.classList.add("mode-hidden"));
+  if (state.dashboardMode === "logistics") document.querySelectorAll(".ops-panel,.finance-panel").forEach((panel) => panel.classList.add("mode-hidden"));
 }
 
 function drawCharts() {
@@ -727,6 +1022,7 @@ async function saveRecord(event) {
   const url = state.editing ? `${mod.endpoint}/${state.editing.id}` : mod.endpoint;
   const method = state.editing ? "PUT" : "POST";
   try {
+    if (state.editing) trackVersions(mod.label, state.editing, body);
     await api(url, { method, body });
     addActivity(`${state.editing ? "Updated" : "Added"} ${mod.label}`);
     toast("Record saved", "success");
@@ -736,6 +1032,18 @@ async function saveRecord(event) {
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+function trackVersions(moduleName, oldRow, newRow) {
+  Object.keys(newRow).forEach((field) => {
+    const oldValue = String(oldRow[field] ?? "");
+    const newValue = String(newRow[field] ?? "");
+    if (oldValue !== newValue) {
+      state.versions.unshift({ module: moduleName, field, oldValue, newValue, at: new Date().toISOString() });
+    }
+  });
+  state.versions = state.versions.slice(0, 20);
+  localStorage.setItem("versions", JSON.stringify(state.versions));
 }
 
 window.editRow = (id) => {
