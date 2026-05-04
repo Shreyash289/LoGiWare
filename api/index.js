@@ -472,6 +472,7 @@ async function approvalsPayload() {
   const supplierMap = Object.fromEntries(suppliers.map((item) => [Number(item.id), item]));
   const rows = orders.map((order) => {
     const status = String(order.status || "");
+    const normalized = status.toLowerCase();
     return {
       id: order.id,
       product: productMap[Number(order.productId)]?.name || `Product ${order.productId}`,
@@ -479,7 +480,7 @@ async function approvalsPayload() {
       quantity: order.quantity,
       status,
       expectedDate: order.expectedDate,
-      nextStep: status.toLowerCase() === "approved" ? "Create shipment" : ["rejected", "cancelled"].includes(status.toLowerCase()) ? "Closed" : "Admin approval required",
+      nextStep: normalized === "approved" ? "Create shipment" : normalized === "received" ? "Completed" : ["rejected", "cancelled"].includes(normalized) ? "Closed" : "Admin approval required",
     };
   });
   return { generatedAt: new Date().toISOString(), orders: rows };

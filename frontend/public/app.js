@@ -199,6 +199,11 @@ function bindEvents() {
 
   $("#globalSearch").addEventListener("input", debounce(globalSearch, 150));
   $("#advancedRunBtn").addEventListener("click", () => runAdvancedModule(state.active, true));
+  $("#advancedContent").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-approval-id][data-approval-status]");
+    if (!button || button.disabled) return;
+    updateApproval(Number(button.dataset.approvalId), button.dataset.approvalStatus);
+  });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -386,8 +391,11 @@ function renderAdvanced(route, payload) {
   if (route === "approvals") {
     content.innerHTML = `<div class="advanced-grid">${(payload.orders || []).map((row) => {
       const status = String(row.status || "").toLowerCase();
-      const closed = ["received", "rejected", "cancelled"].includes(status);
-      return `<article class="panel"><div class="panel-head"><div><h3>Order #${escapeHtml(row.id)}</h3><p>${escapeHtml(row.product)} from ${escapeHtml(row.supplier)}</p></div><span class="pill ${status === "approved" || status === "received" ? "ok" : status === "rejected" || status === "cancelled" ? "danger" : "warn"}">${escapeHtml(row.status)}</span></div><div class="smart-list">${rowSmart("Quantity", String(row.quantity), "Units", "info")}${rowSmart("Next Step", row.nextStep, row.expectedDate || "No ETA", status === "approved" ? "ok" : "warn")}</div><div class="approval-actions"><button class="btn btn-primary" onclick="updateApproval(${Number(row.id)}, 'Approved')" ${status === "approved" || closed ? "disabled" : ""}>Approve</button><button class="btn btn-danger" onclick="updateApproval(${Number(row.id)}, 'Rejected')" ${closed ? "disabled" : ""}>Reject</button><button class="btn btn-secondary" onclick="updateApproval(${Number(row.id)}, 'Received')" ${status !== "approved" ? "disabled" : ""}>Mark Received</button></div></article>`;
+      const statusType = status === "approved" || status === "received" ? "ok" : status === "rejected" || status === "cancelled" ? "danger" : "warn";
+      const canApprove = status === "pending";
+      const canReject = status === "pending" || status === "approved";
+      const canReceive = status === "approved";
+      return `<article class="panel"><div class="panel-head"><div><h3>Order #${escapeHtml(row.id)}</h3><p>${escapeHtml(row.product)} from ${escapeHtml(row.supplier)}</p></div><span class="pill ${statusType}">${escapeHtml(row.status || "Pending")}</span></div><div class="smart-list">${rowSmart("Current Status", row.status || "Pending", "Now", statusType)}${rowSmart("Quantity", String(row.quantity), "Units", "info")}${rowSmart("Next Step", row.nextStep, row.expectedDate || "No ETA", statusType)}</div><div class="approval-actions"><button class="btn btn-primary" data-approval-id="${Number(row.id)}" data-approval-status="Approved" ${canApprove ? "" : "disabled"}>Approve</button><button class="btn btn-danger" data-approval-id="${Number(row.id)}" data-approval-status="Rejected" ${canReject ? "" : "disabled"}>Reject</button><button class="btn btn-secondary" data-approval-id="${Number(row.id)}" data-approval-status="Received" ${canReceive ? "" : "disabled"}>Mark Received</button></div></article>`;
     }).join("") || `<div class="empty">No orders in workflow</div>`}</div>`;
     return;
   }
