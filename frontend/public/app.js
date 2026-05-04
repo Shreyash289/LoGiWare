@@ -30,7 +30,7 @@ const coreModules = {
     endpoint: "/api/suppliers",
     kicker: "Partners",
     pageType: "table",
-    fields: [["name", "Name"], ["contactPerson", "Contact"], ["email", "Email", "email"], ["phone", "Phone"], ["address", "Address"]],
+    fields: [["name", "Name"], ["contactPerson", "Contact"], ["email", "Email", "email"], ["phone", "Phone"], ["address", "Address"], ["creditLimit", "Credit Limit", "number"]],
   },
   orders: {
     label: "Orders",
@@ -59,6 +59,24 @@ const coreModules = {
     statuses: ["Requested", "Approved", "Rejected", "Restocked"],
     fields: [["productId", "Product ID", "number"], ["shipmentId", "Shipment ID", "number"], ["quantity", "Qty", "number"], ["reason", "Reason"], ["status", "Status", "select", ["Requested", "Approved", "Rejected", "Restocked"]]],
   },
+  payments: {
+    label: "Payments",
+    icon: "PY",
+    endpoint: "/api/payments",
+    kicker: "Finance",
+    pageType: "table",
+    statuses: ["Recorded", "Cleared", "Failed"],
+    fields: [["supplierId", "Supplier ID", "number"], ["orderId", "Order ID", "number"], ["amount", "Amount", "number"], ["paymentDate", "Payment Date", "date"], ["method", "Method"], ["status", "Status", "select", ["Recorded", "Cleared", "Failed"]]],
+  },
+  batches: {
+    label: "Product Batches",
+    icon: "BT",
+    endpoint: "/api/batches",
+    kicker: "Traceability",
+    pageType: "table",
+    statuses: ["Active", "Hold", "Expired", "Recalled"],
+    fields: [["batchCode", "Batch Code"], ["productId", "Product ID", "number"], ["supplierId", "Supplier ID", "number"], ["quantity", "Qty", "number"], ["receivedDate", "Received", "date"], ["expiryDate", "Expiry", "date"], ["status", "Status", "select", ["Active", "Hold", "Expired", "Recalled"]]],
+  },
 };
 
 const advancedModules = {
@@ -67,9 +85,12 @@ const advancedModules = {
   forecast: { label: "Forecast & Predictions", icon: "FC", kicker: "Analytics", endpoint: "/api/forecast", description: "Generate demand and delivery risk forecast from historical flow." },
   rca: { label: "Root Cause Analysis", icon: "RC", kicker: "Analytics", endpoint: "/api/rca", description: "Explain why low stock, delays, and return pressure are happening." },
   insights: { label: "Business Insights", icon: "BI", kicker: "Analytics", endpoint: "/api/insights", description: "Convert live operations data into actionable recommendations." },
-  reorder: { label: "Auto-Reorder System", icon: "AR", kicker: "Operations", endpoint: "/api/forecast", description: "Generate reorder drafts based on projected shortages." },
-  explorer: { label: "Relationship Explorer", icon: "RE", kicker: "Data", endpoint: "/api/insights", description: "Trace product links across inventory, orders, shipments, and returns." },
-  consistency: { label: "Data Consistency Checker", icon: "DC", kicker: "Data", endpoint: "/api/rca", description: "Run data integrity checks across operational entities." },
+  ledger: { label: "Supplier Ledger", icon: "SL", kicker: "Finance", endpoint: "/api/finance", description: "Track supplier payments, total paid amount, and outstanding dues." },
+  billing: { label: "Order Billing & Invoices", icon: "IV", kicker: "Finance", endpoint: "/api/billing", description: "Generate order invoice totals with tax and downloadable invoice data." },
+  credit: { label: "Supplier Credit Control", icon: "CR", kicker: "Finance", endpoint: "/api/credit", description: "Monitor supplier credit limits, used credit, and remaining credit." },
+  approvals: { label: "Order Approval Workflow", icon: "AP", kicker: "Workflow", endpoint: "/api/approvals", description: "Review purchase orders by approval state before shipment processing." },
+  pricing: { label: "Dynamic Pricing Engine", icon: "DP", kicker: "Analytics", endpoint: "/api/pricing", description: "Calculate price movement from demand and stock level signals." },
+  batchflow: { label: "Batch Tracking", icon: "BT", kicker: "Traceability", endpoint: "/api/batches/summary", description: "Trace product batches by product, supplier, quantity, and quality status." },
 };
 
 const navGroups = [
@@ -245,7 +266,7 @@ function navigate(route, autoOpen = false) {
 }
 
 async function preloadData() {
-  const targets = ["products", "warehouses", "inventory", "orders", "shipments", "suppliers", "returns"];
+  const targets = ["products", "warehouses", "inventory", "orders", "shipments", "suppliers", "returns", "payments", "batches"];
   await Promise.all(targets.map(async (key) => {
     try { state.allRows[key] = await api(coreModules[key].endpoint); }
     catch { state.allRows[key] = []; }
@@ -336,7 +357,7 @@ function renderAdvanced(route, payload) {
     content.innerHTML = `<div class="twin-grid">${zones.map((z) => `<div class="twin-cell ${z.utilization >= 85 ? "over" : z.utilization < 40 ? "free" : ""}"><strong>${escapeHtml(String(z.code || "Z"))}</strong><span>${escapeHtml(z.name)}</span><p>${z.utilization}% utilized</p></div>`).join("")}</div>`;
     return;
   }
-  if (route === "forecast" || route === "reorder") {
+  if (route === "forecast") {
     const rows = payload.forecast || [];
     content.innerHTML = `<div class="advanced-grid">${rows.map((row) => `<article class="panel"><div class="panel-head"><div><h3>${escapeHtml(row.product)}</h3><p>Projected demand ${row.projectedDemand}</p></div><span class="pill ${row.projectedStock <= row.reorderLevel ? "warn" : "ok"}">${row.risk}</span></div><div class="smart-list">${rowSmart("Projected Stock", String(row.projectedStock), `Reorder ${row.reorderLevel}`, "info")}${rowSmart("Recommended Reorder", String(row.reorderQty), "Units", "warn")}</div></article>`).join("")}</div>`;
     return;
@@ -350,9 +371,28 @@ function renderAdvanced(route, payload) {
     content.innerHTML = `<div class="insight-grid">${(payload.insights || []).map((text) => `<div class="insight-card">${escapeHtml(text)}</div>`).join("")}</div>`;
     return;
   }
-  if (route === "explorer") {
-    const map = payload.relationships || [];
-    content.innerHTML = `<div class="relationship-map">${map.map((node, idx) => `<div class="relation-node ${idx === 0 ? "main" : ""}">${escapeHtml(node)}</div>`).join("")}</div>`;
+  if (route === "ledger") {
+    content.innerHTML = `<div class="advanced-grid">${(payload.suppliers || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>${escapeHtml(row.supplier)}</h3><p>${escapeHtml(row.lastPayment || "No payment recorded")}</p></div><span class="pill ${Number(row.outstanding) > 0 ? "warn" : "ok"}">${formatMoney(row.outstanding)}</span></div><div class="smart-list">${rowSmart("Total Paid", formatMoney(row.totalPaid), "Paid", "ok")}${rowSmart("Order Value", formatMoney(row.orderValue), "Debit", "info")}${rowSmart("Transactions", String(row.paymentCount), "Rows", "info")}</div></article>`).join("") || `<div class="empty">No supplier ledger data</div>`}</div>`;
+    return;
+  }
+  if (route === "billing") {
+    content.innerHTML = `<div class="advanced-grid">${(payload.invoices || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>Invoice #${escapeHtml(row.id)}</h3><p>Order #${escapeHtml(row.orderId)} | ${escapeHtml(row.product)}</p></div><button class="btn btn-secondary" onclick="downloadInvoice(${Number(row.id)})">PDF</button></div><div class="smart-list">${rowSmart("Order Cost", formatMoney(row.orderCost), "Base", "info")}${rowSmart("Tax", formatMoney(row.taxAmount), "18%", "warn")}${rowSmart("Total", formatMoney(row.totalAmount), escapeHtml(row.status), "ok")}</div></article>`).join("") || `<div class="empty">No invoices generated</div>`}</div>`;
+    return;
+  }
+  if (route === "credit") {
+    content.innerHTML = `<div class="advanced-grid">${(payload.credit || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>${escapeHtml(row.supplier)}</h3><p>Credit limit ${formatMoney(row.creditLimit)}</p></div><span class="pill ${row.remainingCredit < 0 ? "danger" : row.remainingCredit < row.creditLimit * 0.25 ? "warn" : "ok"}">${formatMoney(row.remainingCredit)}</span></div><div class="smart-list">${rowSmart("Used Credit", formatMoney(row.usedCredit), `${row.usedPercent}%`, row.usedPercent > 80 ? "danger" : "warn")}${rowSmart("Outstanding", formatMoney(row.outstanding), "Due", "info")}</div></article>`).join("") || `<div class="empty">No supplier credit data</div>`}</div>`;
+    return;
+  }
+  if (route === "approvals") {
+    content.innerHTML = `<div class="advanced-grid">${(payload.orders || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>Order #${escapeHtml(row.id)}</h3><p>${escapeHtml(row.product)} from ${escapeHtml(row.supplier)}</p></div><span class="pill ${String(row.status).toLowerCase() === "approved" ? "ok" : String(row.status).toLowerCase() === "rejected" ? "danger" : "warn"}">${escapeHtml(row.status)}</span></div><div class="smart-list">${rowSmart("Quantity", String(row.quantity), "Units", "info")}${rowSmart("Next Step", row.nextStep, row.expectedDate || "No ETA", "warn")}</div></article>`).join("") || `<div class="empty">No orders in workflow</div>`}</div>`;
+    return;
+  }
+  if (route === "pricing") {
+    content.innerHTML = `<div class="advanced-grid">${(payload.prices || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>${escapeHtml(row.product)}</h3><p>Demand ${row.demand} | Stock ${row.stock}</p></div><span class="pill ${row.adjustment > 0 ? "warn" : row.adjustment < 0 ? "ok" : "info"}">${row.adjustment > 0 ? "+" : ""}${row.adjustment}%</span></div><div class="smart-list">${rowSmart("Current Price", formatMoney(row.currentPrice), "Base", "info")}${rowSmart("Suggested Price", formatMoney(row.suggestedPrice), row.reason, row.adjustment > 0 ? "warn" : "ok")}</div></article>`).join("") || `<div class="empty">No pricing data</div>`}</div>`;
+    return;
+  }
+  if (route === "batchflow") {
+    content.innerHTML = `<div class="advanced-grid">${(payload.batches || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>${escapeHtml(row.batchCode)}</h3><p>${escapeHtml(row.product)} | ${escapeHtml(row.supplier)}</p></div><span class="pill ${String(row.status).toLowerCase() === "active" ? "ok" : "warn"}">${escapeHtml(row.status)}</span></div><div class="smart-list">${rowSmart("Quantity", String(row.quantity), "Units", "info")}${rowSmart("Received", row.receivedDate, row.expiryDate || "No expiry", "ok")}</div></article>`).join("") || `<div class="empty">No product batches recorded</div>`}</div>`;
     return;
   }
 }
@@ -448,7 +488,7 @@ function cell(key, value) {
     const low = qty <= 25;
     return `<div class="stock-cell"><div class="stock-bar ${low ? "low" : ""}"><span style="width:${Math.max(8, Math.min(100, qty / 5))}%"></span></div><span class="pill ${low ? "danger" : "ok"}">${qty}</span></div>`;
   }
-  if (key === "price") return formatMoney(value);
+  if (["price", "amount", "creditLimit"].includes(key)) return formatMoney(value);
   return escapeHtml(value ?? "");
 }
 
@@ -519,6 +559,32 @@ async function globalSearch() {
   box.innerHTML = results.slice(0, 7).map((item) => `<button onclick="navigate('${item.key}')"><strong>${coreModules[item.key].label}</strong><span>${escapeHtml(item.row.name || item.row.status || item.row.trackingNumber || `#${item.row.id}`)}</span></button>`).join("") || `<p>No matches</p>`;
   box.classList.remove("hidden");
 }
+
+window.downloadInvoice = (id) => {
+  const invoice = (state.advancedCache.billing?.invoices || []).find((row) => Number(row.id) === Number(id));
+  if (!invoice) return toast("Invoice not found", "error");
+  const doc = window.open("", "_blank", "width=720,height=840");
+  if (!doc) return toast("Popup blocked", "error");
+  doc.document.write(`
+    <html><head><title>Invoice ${escapeHtml(invoice.id)}</title><style>
+      body{font-family:Arial,sans-serif;padding:32px;color:#111}
+      h1{margin:0 0 6px}.muted{color:#666}.box{border:1px solid #ddd;padding:16px;margin:18px 0}
+      table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border-bottom:1px solid #ddd;padding:10px;text-align:left}
+      .total{font-size:22px;font-weight:700}
+    </style></head><body>
+      <h1>LoGiWare Invoice #${escapeHtml(invoice.id)}</h1>
+      <p class="muted">Order #${escapeHtml(invoice.orderId)} | ${escapeHtml(invoice.invoiceDate)}</p>
+      <div class="box"><strong>Product:</strong> ${escapeHtml(invoice.product)}<br><strong>Supplier:</strong> ${escapeHtml(invoice.supplier)}</div>
+      <table><tr><th>Description</th><th>Amount</th></tr>
+        <tr><td>Order Cost</td><td>${formatMoney(invoice.orderCost)}</td></tr>
+        <tr><td>Tax</td><td>${formatMoney(invoice.taxAmount)}</td></tr>
+        <tr><td class="total">Total</td><td class="total">${formatMoney(invoice.totalAmount)}</td></tr>
+      </table>
+      <script>window.print();<\/script>
+    </body></html>
+  `);
+  doc.document.close();
+};
 
 function exportCsv() {
   const mod = coreModules[state.active];

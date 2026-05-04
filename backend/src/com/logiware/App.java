@@ -128,6 +128,30 @@ public class App {
                 json(exchange, 200, rcaPayload());
                 return;
             }
+            if ("/api/finance".equals(normalizedPath) && "GET".equals(method)) {
+                json(exchange, 200, financePayload());
+                return;
+            }
+            if ("/api/billing".equals(normalizedPath) && "GET".equals(method)) {
+                json(exchange, 200, billingPayload());
+                return;
+            }
+            if ("/api/credit".equals(normalizedPath) && "GET".equals(method)) {
+                json(exchange, 200, creditPayload());
+                return;
+            }
+            if ("/api/approvals".equals(normalizedPath) && "GET".equals(method)) {
+                json(exchange, 200, approvalsPayload());
+                return;
+            }
+            if ("/api/pricing".equals(normalizedPath) && "GET".equals(method)) {
+                json(exchange, 200, pricingPayload());
+                return;
+            }
+            if ("/api/batches/summary".equals(normalizedPath) && "GET".equals(method)) {
+                json(exchange, 200, batchesPayload());
+                return;
+            }
             if ("/api/stream".equals(normalizedPath) && "GET".equals(method)) {
                 stream(exchange);
                 return;
@@ -187,6 +211,9 @@ public class App {
             data.put("orders", store.list(Entity.ORDERS, null, null));
             data.put("shipments", store.list(Entity.SHIPMENTS, null, null));
             data.put("returns", store.list(Entity.RETURNS, null, null));
+            data.put("suppliers", store.list(Entity.SUPPLIERS, null, null));
+            data.put("payments", store.list(Entity.PAYMENTS, null, null));
+            data.put("batches", store.list(Entity.BATCHES, null, null));
             return data;
         }
 
@@ -337,6 +364,116 @@ public class App {
             );
             return Map.of("generatedAt", Instant.now().toString(), "rootCauses", rootCauses, "consistency", consistency);
         }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> financePayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> suppliers = (List<Map<String, Object>>) analytics.get("suppliers");
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            List<Map<String, Object>> products = (List<Map<String, Object>>) analytics.get("products");
+            List<Map<String, Object>> payments = (List<Map<String, Object>>) analytics.get("payments");
+            Map<Integer, Map<String, Object>> productMap = byIntId(products);
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Map<String, Object> supplier : suppliers) {
+                int supplierId = number(supplier.get("id"));
+                double orderValue = orders.stream().filter(order -> number(order.get("supplierId")) == supplierId).mapToDouble(order -> orderValue(order, productMap)).sum();
+                double totalPaid = payments.stream().filter(payment -> number(payment.get("supplierId")) == supplierId && !"failed".equalsIgnoreCase(String.valueOf(payment.get("status")))).mapToDouble(payment -> decimal(payment.get("amount"))).sum();
+                long paymentCount = payments.stream().filter(payment -> number(payment.get("supplierId")) == supplierId).count();
+                String lastPayment = payments.stream().filter(payment -> number(payment.get("supplierId")) == supplierId).map(payment -> "Last payment " + money(decimal(payment.get("amount"))) + " on " + payment.get("paymentDate")).findFirst().orElse("No payment recorded");
+                rows.add(Map.of("supplier", String.valueOf(supplier.get("name")), "orderValue", round(orderValue), "totalPaid", round(totalPaid), "outstanding", round(Math.max(0, orderValue - totalPaid)), "paymentCount", paymentCount, "lastPayment", lastPayment));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "suppliers", rows);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> billingPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            List<Map<String, Object>> products = (List<Map<String, Object>>) analytics.get("products");
+            List<Map<String, Object>> suppliers = (List<Map<String, Object>>) analytics.get("suppliers");
+            Map<Integer, Map<String, Object>> productMap = byIntId(products);
+            Map<Integer, Map<String, Object>> supplierMap = byIntId(suppliers);
+            List<Map<String, Object>> invoices = new ArrayList<>();
+            for (Map<String, Object> order : orders) {
+                double cost = orderValue(order, productMap);
+                double tax = cost * 0.18;
+                int supplierId = number(order.get("supplierId"));
+                int productId = number(order.get("productId"));
+                invoices.add(Map.of("id", order.get("id"), "orderId", order.get("id"), "product", String.valueOf(productMap.getOrDefault(productId, Map.of("name", "Product " + productId)).get("name")), "supplier", String.valueOf(supplierMap.getOrDefault(supplierId, Map.of("name", "Supplier " + supplierId)).get("name")), "orderCost", round(cost), "taxAmount", round(tax), "totalAmount", round(cost + tax), "invoiceDate", String.valueOf(order.getOrDefault("createdAt", Instant.now().toString())), "status", order.get("status")));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "invoices", invoices);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> creditPayload() throws Exception {
+            Map<String, Object> finance = financePayload();
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> suppliers = (List<Map<String, Object>>) analytics.get("suppliers");
+            List<Map<String, Object>> ledger = (List<Map<String, Object>>) finance.get("suppliers");
+            List<Map<String, Object>> credit = new ArrayList<>();
+            for (int i = 0; i < suppliers.size(); i++) {
+                Map<String, Object> supplier = suppliers.get(i);
+                Map<String, Object> row = ledger.get(i);
+                double limit = decimal(supplier.getOrDefault("creditLimit", 0));
+                double outstanding = decimal(row.get("outstanding"));
+                double remaining = limit - outstanding;
+                int usedPercent = limit <= 0 ? (outstanding > 0 ? 100 : 0) : (int) Math.round((outstanding * 100.0) / limit);
+                credit.add(Map.of("supplier", supplier.get("name"), "creditLimit", round(limit), "usedCredit", round(outstanding), "remainingCredit", round(remaining), "outstanding", round(outstanding), "usedPercent", usedPercent));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "credit", credit);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> approvalsPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            Map<Integer, Map<String, Object>> products = byIntId((List<Map<String, Object>>) analytics.get("products"));
+            Map<Integer, Map<String, Object>> suppliers = byIntId((List<Map<String, Object>>) analytics.get("suppliers"));
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Map<String, Object> order : orders) {
+                String status = String.valueOf(order.get("status"));
+                String next = "Approved".equalsIgnoreCase(status) ? "Create shipment" : "Rejected".equalsIgnoreCase(status) || "Cancelled".equalsIgnoreCase(status) ? "Closed" : "Admin approval required";
+                int productId = number(order.get("productId"));
+                int supplierId = number(order.get("supplierId"));
+                rows.add(Map.of("id", order.get("id"), "product", products.getOrDefault(productId, Map.of("name", "Product " + productId)).get("name"), "supplier", suppliers.getOrDefault(supplierId, Map.of("name", "Supplier " + supplierId)).get("name"), "quantity", order.get("quantity"), "status", status, "expectedDate", String.valueOf(order.getOrDefault("expectedDate", "")), "nextStep", next));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "orders", rows);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> pricingPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> products = (List<Map<String, Object>>) analytics.get("products");
+            List<Map<String, Object>> inventory = (List<Map<String, Object>>) analytics.get("inventory");
+            List<Map<String, Object>> orders = (List<Map<String, Object>>) analytics.get("orders");
+            List<Map<String, Object>> prices = new ArrayList<>();
+            for (Map<String, Object> product : products) {
+                int productId = number(product.get("id"));
+                int stock = inventory.stream().filter(row -> number(row.get("productId")) == productId).mapToInt(row -> number(row.get("quantity"))).sum();
+                int demand = orders.stream().filter(row -> number(row.get("productId")) == productId).mapToInt(row -> number(row.get("quantity"))).sum();
+                int reorder = number(product.get("reorderLevel"));
+                int adjustment = stock <= reorder ? 12 : demand > stock ? 8 : stock > reorder * 4 ? -7 : 0;
+                double current = decimal(product.get("price"));
+                String reason = adjustment > 0 ? "Low stock or demand pressure" : adjustment < 0 ? "High stock availability" : "Stable demand";
+                prices.add(Map.of("product", product.get("name"), "stock", stock, "demand", demand, "currentPrice", round(current), "suggestedPrice", round(current * (1 + adjustment / 100.0)), "adjustment", adjustment, "reason", reason));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "prices", prices);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> batchesPayload() throws Exception {
+            Map<String, Object> analytics = analyticsData();
+            List<Map<String, Object>> batches = (List<Map<String, Object>>) analytics.get("batches");
+            Map<Integer, Map<String, Object>> products = byIntId((List<Map<String, Object>>) analytics.get("products"));
+            Map<Integer, Map<String, Object>> suppliers = byIntId((List<Map<String, Object>>) analytics.get("suppliers"));
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Map<String, Object> batch : batches) {
+                int productId = number(batch.get("productId"));
+                int supplierId = number(batch.get("supplierId"));
+                rows.add(Map.of("batchCode", batch.get("batchCode"), "product", products.getOrDefault(productId, Map.of("name", "Product " + productId)).get("name"), "supplier", suppliers.getOrDefault(supplierId, Map.of("name", "Supplier " + supplierId)).get("name"), "quantity", batch.get("quantity"), "receivedDate", batch.get("receivedDate"), "expiryDate", String.valueOf(batch.getOrDefault("expiryDate", "")), "status", batch.get("status")));
+            }
+            return Map.of("generatedAt", Instant.now().toString(), "batches", rows);
+        }
     }
 
     static final class StaticHandler implements HttpHandler {
@@ -361,10 +498,12 @@ public class App {
         PRODUCTS("products", "products", List.of("name", "category", "price", "weight", "reorderLevel"), "name"),
         WAREHOUSES("warehouses", "warehouses", List.of("name", "location", "capacity", "storageType"), "name"),
         INVENTORY("inventory", "inventory", List.of("productId", "warehouseId", "quantity"), "quantity"),
-        SUPPLIERS("suppliers", "suppliers", List.of("name", "contactPerson", "email", "phone", "address"), "name"),
+        SUPPLIERS("suppliers", "suppliers", List.of("name", "contactPerson", "email", "phone", "address", "creditLimit"), "name"),
         ORDERS("orders", "purchase_orders", List.of("supplierId", "productId", "quantity", "status", "expectedDate"), "status"),
         SHIPMENTS("shipments", "shipments", List.of("orderId", "trackingNumber", "carrier", "status", "origin", "destination", "shipDate", "deliveryDate"), "status"),
-        RETURNS("returns", "product_returns", List.of("productId", "shipmentId", "quantity", "reason", "status"), "status");
+        RETURNS("returns", "product_returns", List.of("productId", "shipmentId", "quantity", "reason", "status"), "status"),
+        PAYMENTS("payments", "payments", List.of("supplierId", "orderId", "amount", "paymentDate", "method", "status"), "status"),
+        BATCHES("batches", "product_batches", List.of("batchCode", "productId", "supplierId", "quantity", "receivedDate", "expiryDate", "status"), "batchCode");
 
         final String route;
         final String table;
@@ -436,11 +575,19 @@ public class App {
                 st.execute("CREATE TABLE IF NOT EXISTS admin_users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(80) UNIQUE NOT NULL, password_hash VARCHAR(128) NOT NULL)");
                 st.execute("CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, category VARCHAR(80) NOT NULL, price DECIMAL(10,2) NOT NULL, weight DECIMAL(10,2) NOT NULL, reorderLevel INT NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
                 st.execute("CREATE TABLE IF NOT EXISTS warehouses (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, location VARCHAR(160) NOT NULL, capacity INT NOT NULL, storageType VARCHAR(80) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                st.execute("CREATE TABLE IF NOT EXISTS suppliers (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, contactPerson VARCHAR(120), email VARCHAR(120), phone VARCHAR(40), address VARCHAR(220), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS suppliers (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, contactPerson VARCHAR(120), email VARCHAR(120), phone VARCHAR(40), address VARCHAR(220), creditLimit DECIMAL(12,2) NOT NULL DEFAULT 0, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
                 st.execute("CREATE TABLE IF NOT EXISTS inventory (id INT AUTO_INCREMENT PRIMARY KEY, productId INT NOT NULL, warehouseId INT NOT NULL, quantity INT NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
                 st.execute("CREATE TABLE IF NOT EXISTS purchase_orders (id INT AUTO_INCREMENT PRIMARY KEY, supplierId INT NOT NULL, productId INT NOT NULL, quantity INT NOT NULL, status VARCHAR(40) NOT NULL, expectedDate VARCHAR(40), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
                 st.execute("CREATE TABLE IF NOT EXISTS shipments (id INT AUTO_INCREMENT PRIMARY KEY, orderId INT, trackingNumber VARCHAR(120), carrier VARCHAR(120), status VARCHAR(40) NOT NULL, origin VARCHAR(160), destination VARCHAR(160), shipDate VARCHAR(40), deliveryDate VARCHAR(40), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
                 st.execute("CREATE TABLE IF NOT EXISTS product_returns (id INT AUTO_INCREMENT PRIMARY KEY, productId INT NOT NULL, shipmentId INT, quantity INT NOT NULL, reason VARCHAR(220), status VARCHAR(40) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS payments (id INT AUTO_INCREMENT PRIMARY KEY, supplierId INT NOT NULL, orderId INT, amount DECIMAL(12,2) NOT NULL, paymentDate VARCHAR(40) NOT NULL, method VARCHAR(60) NOT NULL, status VARCHAR(40) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS supplier_ledger (id INT AUTO_INCREMENT PRIMARY KEY, supplierId INT NOT NULL, entryType VARCHAR(40) NOT NULL, referenceId INT, debit DECIMAL(12,2) NOT NULL DEFAULT 0, credit DECIMAL(12,2) NOT NULL DEFAULT 0, entryDate VARCHAR(40) NOT NULL, note VARCHAR(220), createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS invoices (id INT AUTO_INCREMENT PRIMARY KEY, orderId INT NOT NULL UNIQUE, orderCost DECIMAL(12,2) NOT NULL, taxAmount DECIMAL(12,2) NOT NULL, totalAmount DECIMAL(12,2) NOT NULL, invoiceDate VARCHAR(40) NOT NULL, status VARCHAR(40) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                st.execute("CREATE TABLE IF NOT EXISTS product_batches (id INT AUTO_INCREMENT PRIMARY KEY, batchCode VARCHAR(80) NOT NULL UNIQUE, productId INT NOT NULL, supplierId INT NOT NULL, quantity INT NOT NULL, receivedDate VARCHAR(40) NOT NULL, expiryDate VARCHAR(40), status VARCHAR(40) NOT NULL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+                try {
+                    st.execute("ALTER TABLE suppliers ADD COLUMN creditLimit DECIMAL(12,2) NOT NULL DEFAULT 0");
+                } catch (SQLException ignored) {
+                }
             }
             seed();
         }
@@ -468,11 +615,13 @@ public class App {
             create(Entity.PRODUCTS, Map.of("name", "Packing Tape", "category", "Packaging", "price", 75, "weight", 0.2, "reorderLevel", 120));
             create(Entity.WAREHOUSES, Map.of("name", "North Hub", "location", "Delhi", "capacity", 25000, "storageType", "Ambient"));
             create(Entity.WAREHOUSES, Map.of("name", "Cold Bay", "location", "Pune", "capacity", 8000, "storageType", "Cold"));
-            create(Entity.SUPPLIERS, Map.of("name", "Swift Supply Co", "contactPerson", "Riya Sharma", "email", "riya@swift.example", "phone", "+91 98765 43210", "address", "Noida"));
+            create(Entity.SUPPLIERS, Map.of("name", "Swift Supply Co", "contactPerson", "Riya Sharma", "email", "riya@swift.example", "phone", "+91 98765 43210", "address", "Noida", "creditLimit", 250000));
             create(Entity.INVENTORY, Map.of("productId", 1, "warehouseId", 1, "quantity", 18));
             create(Entity.INVENTORY, Map.of("productId", 2, "warehouseId", 1, "quantity", 420));
             create(Entity.ORDERS, Map.of("supplierId", 1, "productId", 1, "quantity", 100, "status", "Pending", "expectedDate", "2026-05-08"));
             create(Entity.SHIPMENTS, Map.of("orderId", 1, "trackingNumber", "LGW-88342", "carrier", "BlueDart", "status", "Shipped", "origin", "Delhi", "destination", "Mumbai", "shipDate", "2026-05-01", "deliveryDate", "2026-05-04"));
+            create(Entity.PAYMENTS, Map.of("supplierId", 1, "orderId", 1, "amount", 50000, "paymentDate", "2026-05-03", "method", "Bank Transfer", "status", "Recorded"));
+            create(Entity.BATCHES, Map.of("batchCode", "BATCH-LGW-001", "productId", 1, "supplierId", 1, "quantity", 100, "receivedDate", "2026-05-01", "expiryDate", "2027-05-01", "status", "Active"));
         }
 
         public boolean validAdmin(String username, String password) throws Exception {
@@ -520,7 +669,11 @@ public class App {
                 ps.executeUpdate();
                 try (ResultSet keys = ps.getGeneratedKeys()) {
                     keys.next();
-                    return byId(entity, keys.getInt(1));
+                    int id = keys.getInt(1);
+                    if (entity == Entity.ORDERS) {
+                        syncInvoice(id);
+                    }
+                    return byId(entity, id);
                 }
             }
         }
@@ -536,6 +689,9 @@ public class App {
                 bind(ps, fields, body);
                 ps.setInt(fields.size() + 1, id);
                 ps.executeUpdate();
+                if (entity == Entity.ORDERS) {
+                    syncInvoice(id);
+                }
                 return byId(entity, id);
             }
         }
@@ -571,6 +727,29 @@ public class App {
                 }
             }
         }
+
+        private void syncInvoice(int orderId) throws Exception {
+            String read = "SELECT po.id, po.quantity, po.status, p.price FROM purchase_orders po JOIN products p ON p.id = po.productId WHERE po.id = ?";
+            try (Connection con = connection(); PreparedStatement ps = con.prepareStatement(read)) {
+                ps.setInt(1, orderId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) return;
+                    double cost = rs.getInt("quantity") * rs.getDouble("price");
+                    double tax = cost * 0.18;
+                    String status = rs.getString("status");
+                    String upsert = "INSERT INTO invoices (orderId, orderCost, taxAmount, totalAmount, invoiceDate, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE orderCost = VALUES(orderCost), taxAmount = VALUES(taxAmount), totalAmount = VALUES(totalAmount), status = VALUES(status)";
+                    try (PreparedStatement invoice = con.prepareStatement(upsert)) {
+                        invoice.setInt(1, orderId);
+                        invoice.setDouble(2, round(cost));
+                        invoice.setDouble(3, round(tax));
+                        invoice.setDouble(4, round(cost + tax));
+                        invoice.setString(5, Instant.now().toString().substring(0, 10));
+                        invoice.setString(6, status);
+                        invoice.executeUpdate();
+                    }
+                }
+            }
+        }
     }
 
     static final class MemoryStore implements Store {
@@ -587,11 +766,13 @@ public class App {
                 create(Entity.PRODUCTS, Map.of("name", "Packing Tape", "category", "Packaging", "price", 75, "weight", 0.2, "reorderLevel", 120));
                 create(Entity.WAREHOUSES, Map.of("name", "North Hub", "location", "Delhi", "capacity", 25000, "storageType", "Ambient"));
                 create(Entity.WAREHOUSES, Map.of("name", "Cold Bay", "location", "Pune", "capacity", 8000, "storageType", "Cold"));
-                create(Entity.SUPPLIERS, Map.of("name", "Swift Supply Co", "contactPerson", "Riya Sharma", "email", "riya@swift.example", "phone", "+91 98765 43210", "address", "Noida"));
+                create(Entity.SUPPLIERS, Map.of("name", "Swift Supply Co", "contactPerson", "Riya Sharma", "email", "riya@swift.example", "phone", "+91 98765 43210", "address", "Noida", "creditLimit", 250000));
                 create(Entity.INVENTORY, Map.of("productId", 1, "warehouseId", 1, "quantity", 18));
                 create(Entity.INVENTORY, Map.of("productId", 2, "warehouseId", 1, "quantity", 420));
                 create(Entity.ORDERS, Map.of("supplierId", 1, "productId", 1, "quantity", 100, "status", "Pending", "expectedDate", "2026-05-08"));
                 create(Entity.SHIPMENTS, Map.of("orderId", 1, "trackingNumber", "LGW-88342", "carrier", "BlueDart", "status", "Shipped", "origin", "Delhi", "destination", "Mumbai", "shipDate", "2026-05-01", "deliveryDate", "2026-05-04"));
+                create(Entity.PAYMENTS, Map.of("supplierId", 1, "orderId", 1, "amount", 50000, "paymentDate", "2026-05-03", "method", "Bank Transfer", "status", "Recorded"));
+                create(Entity.BATCHES, Map.of("batchCode", "BATCH-LGW-001", "productId", 1, "supplierId", 1, "quantity", 100, "receivedDate", "2026-05-01", "expiryDate", "2027-05-01", "status", "Active"));
             } catch (Exception ignored) {
             }
         }
@@ -804,7 +985,7 @@ public class App {
                 throw new BadRequest("Missing field: " + field);
             }
         }
-        for (String field : List.of("price", "weight", "reorderLevel", "capacity", "quantity", "productId", "warehouseId", "supplierId", "orderId", "shipmentId")) {
+        for (String field : List.of("price", "weight", "reorderLevel", "capacity", "quantity", "productId", "warehouseId", "supplierId", "orderId", "shipmentId", "amount", "creditLimit")) {
             if (body.containsKey(field) && body.get(field) != null && number(body.get(field)) < 0) {
                 throw new BadRequest(field + " cannot be negative");
             }
@@ -879,6 +1060,33 @@ public class App {
             return number.intValue();
         }
         return Integer.parseInt(String.valueOf(value));
+    }
+
+    private static double decimal(Object value) {
+        if (value == null) return 0;
+        if (value instanceof Number number) return number.doubleValue();
+        return Double.parseDouble(String.valueOf(value));
+    }
+
+    private static double round(double value) {
+        return Math.round(value * 100.0) / 100.0;
+    }
+
+    private static String money(double value) {
+        return "Rs " + Math.round(value);
+    }
+
+    private static Map<Integer, Map<String, Object>> byIntId(List<Map<String, Object>> rows) {
+        Map<Integer, Map<String, Object>> map = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            map.put(number(row.get("id")), row);
+        }
+        return map;
+    }
+
+    private static double orderValue(Map<String, Object> order, Map<Integer, Map<String, Object>> productMap) {
+        Map<String, Object> product = productMap.get(number(order.get("productId")));
+        return number(order.get("quantity")) * decimal(product == null ? 0 : product.get("price"));
     }
 
     private static String query(HttpExchange exchange, String key) {

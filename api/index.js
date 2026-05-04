@@ -31,7 +31,7 @@ const entities = {
   suppliers: {
     table: "suppliers",
     label: "name",
-    fields: ["name", "contactPerson", "email", "phone", "address"],
+    fields: ["name", "contactPerson", "email", "phone", "address", "creditLimit"],
   },
   orders: {
     table: "purchase_orders",
@@ -47,6 +47,16 @@ const entities = {
     table: "product_returns",
     label: "status",
     fields: ["productId", "shipmentId", "quantity", "reason", "status"],
+  },
+  payments: {
+    table: "payments",
+    label: "status",
+    fields: ["supplierId", "orderId", "amount", "paymentDate", "method", "status"],
+  },
+  batches: {
+    table: "product_batches",
+    label: "batchCode",
+    fields: ["batchCode", "productId", "supplierId", "quantity", "receivedDate", "expiryDate", "status"],
   },
 };
 
@@ -99,6 +109,30 @@ module.exports = async function handler(req, res) {
 
     if (path === "/api/rca" && req.method === "GET") {
       return send(res, 200, await rcaPayload());
+    }
+
+    if (path === "/api/finance" && req.method === "GET") {
+      return send(res, 200, await financePayload());
+    }
+
+    if (path === "/api/billing" && req.method === "GET") {
+      return send(res, 200, await billingPayload());
+    }
+
+    if (path === "/api/credit" && req.method === "GET") {
+      return send(res, 200, await creditPayload());
+    }
+
+    if (path === "/api/approvals" && req.method === "GET") {
+      return send(res, 200, await approvalsPayload());
+    }
+
+    if (path === "/api/pricing" && req.method === "GET") {
+      return send(res, 200, await pricingPayload());
+    }
+
+    if (path === "/api/batches/summary" && req.method === "GET") {
+      return send(res, 200, await batchesPayload());
     }
 
     if (path === "/api/stream" && req.method === "GET") {
@@ -244,7 +278,8 @@ async function analyticsData() {
     list("shipments"),
     list("returns"),
   ]);
-  return { products, warehouses, inventory, orders, shipments, returns };
+  const [suppliers, payments, batches] = await Promise.all([list("suppliers"), list("payments"), list("batches")]);
+  return { products, warehouses, inventory, orders, shipments, returns, suppliers, payments, batches };
 }
 
 async function forecastPayload() {
@@ -368,6 +403,126 @@ async function rcaPayload() {
   return { generatedAt: new Date().toISOString(), rootCauses, consistency };
 }
 
+async function financePayload() {
+  const { suppliers, orders, products, payments } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const rows = suppliers.map((supplier) => {
+    const supplierId = Number(supplier.id);
+    const orderValue = orders.filter((order) => Number(order.supplierId) === supplierId).reduce((sum, order) => sum + orderTotal(order, productMap), 0);
+    const supplierPayments = payments.filter((payment) => Number(payment.supplierId) === supplierId);
+    const totalPaid = supplierPayments.filter((payment) => String(payment.status || "").toLowerCase() !== "failed").reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const last = supplierPayments[0];
+    return {
+      supplier: supplier.name,
+      orderValue: roundMoney(orderValue),
+      totalPaid: roundMoney(totalPaid),
+      outstanding: roundMoney(Math.max(0, orderValue - totalPaid)),
+      paymentCount: supplierPayments.length,
+      lastPayment: last ? `Last payment Rs ${Number(last.amount || 0).toLocaleString("en-IN")} on ${last.paymentDate}` : "No payment recorded",
+    };
+  });
+  return { generatedAt: new Date().toISOString(), suppliers: rows };
+}
+
+async function billingPayload() {
+  const { orders, products, suppliers } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const supplierMap = Object.fromEntries(suppliers.map((item) => [Number(item.id), item]));
+  const invoices = orders.map((order) => {
+    const cost = orderTotal(order, productMap);
+    const tax = cost * 0.18;
+    const product = productMap[Number(order.productId)];
+    const supplier = supplierMap[Number(order.supplierId)];
+    return {
+      id: order.id,
+      orderId: order.id,
+      product: product?.name || `Product ${order.productId}`,
+      supplier: supplier?.name || `Supplier ${order.supplierId}`,
+      orderCost: roundMoney(cost),
+      taxAmount: roundMoney(tax),
+      totalAmount: roundMoney(cost + tax),
+      invoiceDate: order.createdAt || new Date().toISOString(),
+      status: order.status,
+    };
+  });
+  return { generatedAt: new Date().toISOString(), invoices };
+}
+
+async function creditPayload() {
+  const [{ suppliers }, finance] = await Promise.all([analyticsData(), financePayload()]);
+  const credit = suppliers.map((supplier, index) => {
+    const ledger = finance.suppliers[index] || {};
+    const limit = Number(supplier.creditLimit || 0);
+    const outstanding = Number(ledger.outstanding || 0);
+    return {
+      supplier: supplier.name,
+      creditLimit: roundMoney(limit),
+      usedCredit: roundMoney(outstanding),
+      remainingCredit: roundMoney(limit - outstanding),
+      outstanding: roundMoney(outstanding),
+      usedPercent: limit <= 0 ? (outstanding > 0 ? 100 : 0) : Math.round((outstanding / limit) * 100),
+    };
+  });
+  return { generatedAt: new Date().toISOString(), credit };
+}
+
+async function approvalsPayload() {
+  const { orders, products, suppliers } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const supplierMap = Object.fromEntries(suppliers.map((item) => [Number(item.id), item]));
+  const rows = orders.map((order) => {
+    const status = String(order.status || "");
+    return {
+      id: order.id,
+      product: productMap[Number(order.productId)]?.name || `Product ${order.productId}`,
+      supplier: supplierMap[Number(order.supplierId)]?.name || `Supplier ${order.supplierId}`,
+      quantity: order.quantity,
+      status,
+      expectedDate: order.expectedDate,
+      nextStep: status.toLowerCase() === "approved" ? "Create shipment" : ["rejected", "cancelled"].includes(status.toLowerCase()) ? "Closed" : "Admin approval required",
+    };
+  });
+  return { generatedAt: new Date().toISOString(), orders: rows };
+}
+
+async function pricingPayload() {
+  const { products, inventory, orders } = await analyticsData();
+  const prices = products.map((product) => {
+    const productId = Number(product.id);
+    const stock = inventory.filter((row) => Number(row.productId) === productId).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const demand = orders.filter((row) => Number(row.productId) === productId).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const reorder = Number(product.reorderLevel || 0);
+    const adjustment = stock <= reorder ? 12 : demand > stock ? 8 : stock > reorder * 4 ? -7 : 0;
+    const currentPrice = Number(product.price || 0);
+    return {
+      product: product.name,
+      stock,
+      demand,
+      currentPrice: roundMoney(currentPrice),
+      suggestedPrice: roundMoney(currentPrice * (1 + adjustment / 100)),
+      adjustment,
+      reason: adjustment > 0 ? "Low stock or demand pressure" : adjustment < 0 ? "High stock availability" : "Stable demand",
+    };
+  });
+  return { generatedAt: new Date().toISOString(), prices };
+}
+
+async function batchesPayload() {
+  const { batches, products, suppliers } = await analyticsData();
+  const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
+  const supplierMap = Object.fromEntries(suppliers.map((item) => [Number(item.id), item]));
+  const rows = batches.map((batch) => ({
+    batchCode: batch.batchCode,
+    product: productMap[Number(batch.productId)]?.name || `Product ${batch.productId}`,
+    supplier: supplierMap[Number(batch.supplierId)]?.name || `Supplier ${batch.supplierId}`,
+    quantity: batch.quantity,
+    receivedDate: batch.receivedDate,
+    expiryDate: batch.expiryDate || "",
+    status: batch.status,
+  }));
+  return { generatedAt: new Date().toISOString(), batches: rows };
+}
+
 let pool;
 async function getDb() {
   const url = process.env.MYSQL_URL || process.env.DATABASE_URL;
@@ -393,7 +548,7 @@ function createMemory() {
       { id: 2, productId: 2, warehouseId: 1, quantity: 420 },
     ],
     suppliers: [
-      { id: 1, name: "Swift Supply Co", contactPerson: "Riya Sharma", email: "riya@swift.example", phone: "+91 98765 43210", address: "Noida" },
+      { id: 1, name: "Swift Supply Co", contactPerson: "Riya Sharma", email: "riya@swift.example", phone: "+91 98765 43210", address: "Noida", creditLimit: 250000 },
     ],
     orders: [
       { id: 1, supplierId: 1, productId: 1, quantity: 100, status: "Pending", expectedDate: "2026-05-08" },
@@ -402,6 +557,12 @@ function createMemory() {
       { id: 1, orderId: 1, trackingNumber: "LGW-88342", carrier: "BlueDart", status: "Shipped", origin: "Delhi", destination: "Mumbai", shipDate: "2026-05-01", deliveryDate: "2026-05-04" },
     ],
     returns: [],
+    payments: [
+      { id: 1, supplierId: 1, orderId: 1, amount: 50000, paymentDate: "2026-05-03", method: "Bank Transfer", status: "Recorded" },
+    ],
+    batches: [
+      { id: 1, batchCode: "BATCH-LGW-001", productId: 1, supplierId: 1, quantity: 100, receivedDate: "2026-05-01", expiryDate: "2027-05-01", status: "Active" },
+    ],
   };
 }
 
@@ -413,7 +574,7 @@ function validate(entity, body, partial) {
   for (const field of entity.fields) {
     if (!partial && !Object.hasOwn(body, field)) throw bad(`Missing field: ${field}`);
   }
-  for (const field of ["price", "weight", "reorderLevel", "capacity", "quantity", "productId", "warehouseId", "supplierId", "orderId", "shipmentId"]) {
+  for (const field of ["price", "weight", "reorderLevel", "capacity", "quantity", "productId", "warehouseId", "supplierId", "orderId", "shipmentId", "amount", "creditLimit"]) {
     if (Object.hasOwn(body, field) && body[field] !== null && Number(body[field]) < 0) throw bad(`${field} cannot be negative`);
   }
   if (body.email && !String(body.email).includes("@")) throw bad("Invalid email");
@@ -421,6 +582,15 @@ function validate(entity, body, partial) {
 
 function pick(source, fields) {
   return Object.fromEntries(fields.map((field) => [field, source[field]]));
+}
+
+function orderTotal(order, productMap) {
+  const product = productMap[Number(order.productId)];
+  return Number(order.quantity || 0) * Number(product?.price || 0);
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
 }
 
 function readJson(req) {
