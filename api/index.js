@@ -471,7 +471,7 @@ async function approvalsPayload() {
   const productMap = Object.fromEntries(products.map((item) => [Number(item.id), item]));
   const supplierMap = Object.fromEntries(suppliers.map((item) => [Number(item.id), item]));
   const rows = orders.map((order) => {
-    const status = String(order.status || "");
+    const status = String(order.status || "Pending").trim();
     const normalized = status.toLowerCase();
     return {
       id: order.id,

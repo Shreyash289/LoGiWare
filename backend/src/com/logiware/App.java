@@ -431,11 +431,17 @@ public class App {
             Map<Integer, Map<String, Object>> suppliers = byIntId((List<Map<String, Object>>) analytics.get("suppliers"));
             List<Map<String, Object>> rows = new ArrayList<>();
             for (Map<String, Object> order : orders) {
-                String status = String.valueOf(order.get("status"));
-                String next = "Approved".equalsIgnoreCase(status) ? "Create shipment"
-                        : "Received".equalsIgnoreCase(status) ? "Completed"
-                        : "Rejected".equalsIgnoreCase(status) || "Cancelled".equalsIgnoreCase(status) ? "Closed"
-                        : "Admin approval required";
+                String status = String.valueOf(order.getOrDefault("status", "Pending")).trim();
+                String next;
+                if ("Approved".equalsIgnoreCase(status)) {
+                    next = "Create shipment";
+                } else if ("Received".equalsIgnoreCase(status)) {
+                    next = "Completed";
+                } else if ("Rejected".equalsIgnoreCase(status) || "Cancelled".equalsIgnoreCase(status)) {
+                    next = "Closed";
+                } else {
+                    next = "Admin approval required";
+                }
                 int productId = number(order.get("productId"));
                 int supplierId = number(order.get("supplierId"));
                 rows.add(Map.of("id", order.get("id"), "product", products.getOrDefault(productId, Map.of("name", "Product " + productId)).get("name"), "supplier", suppliers.getOrDefault(supplierId, Map.of("name", "Supplier " + supplierId)).get("name"), "quantity", order.get("quantity"), "status", status, "expectedDate", String.valueOf(order.getOrDefault("expectedDate", "")), "nextStep", next));
