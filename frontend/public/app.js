@@ -38,8 +38,8 @@ const coreModules = {
     endpoint: "/api/orders",
     kicker: "Purchasing",
     pageType: "table",
-    statuses: ["Pending", "Approved", "Received", "Cancelled"],
-    fields: [["supplierId", "Supplier ID", "number"], ["productId", "Product ID", "number"], ["quantity", "Qty", "number"], ["status", "Status", "select", ["Pending", "Approved", "Received", "Cancelled"]], ["expectedDate", "ETA", "date"]],
+    statuses: ["Pending", "Approved", "Received", "Rejected", "Cancelled"],
+    fields: [["supplierId", "Supplier ID", "number"], ["productId", "Product ID", "number"], ["quantity", "Qty", "number"], ["status", "Status", "select", ["Pending", "Approved", "Received", "Rejected", "Cancelled"]], ["expectedDate", "ETA", "date"]],
   },
   shipments: {
     label: "Shipments",
@@ -384,7 +384,11 @@ function renderAdvanced(route, payload) {
     return;
   }
   if (route === "approvals") {
-    content.innerHTML = `<div class="advanced-grid">${(payload.orders || []).map((row) => `<article class="panel"><div class="panel-head"><div><h3>Order #${escapeHtml(row.id)}</h3><p>${escapeHtml(row.product)} from ${escapeHtml(row.supplier)}</p></div><span class="pill ${String(row.status).toLowerCase() === "approved" ? "ok" : String(row.status).toLowerCase() === "rejected" ? "danger" : "warn"}">${escapeHtml(row.status)}</span></div><div class="smart-list">${rowSmart("Quantity", String(row.quantity), "Units", "info")}${rowSmart("Next Step", row.nextStep, row.expectedDate || "No ETA", "warn")}</div></article>`).join("") || `<div class="empty">No orders in workflow</div>`}</div>`;
+    content.innerHTML = `<div class="advanced-grid">${(payload.orders || []).map((row) => {
+      const status = String(row.status || "").toLowerCase();
+      const closed = ["received", "rejected", "cancelled"].includes(status);
+      return `<article class="panel"><div class="panel-head"><div><h3>Order #${escapeHtml(row.id)}</h3><p>${escapeHtml(row.product)} from ${escapeHtml(row.supplier)}</p></div><span class="pill ${status === "approved" || status === "received" ? "ok" : status === "rejected" || status === "cancelled" ? "danger" : "warn"}">${escapeHtml(row.status)}</span></div><div class="smart-list">${rowSmart("Quantity", String(row.quantity), "Units", "info")}${rowSmart("Next Step", row.nextStep, row.expectedDate || "No ETA", status === "approved" ? "ok" : "warn")}</div><div class="approval-actions"><button class="btn btn-primary" onclick="updateApproval(${Number(row.id)}, 'Approved')" ${status === "approved" || closed ? "disabled" : ""}>Approve</button><button class="btn btn-danger" onclick="updateApproval(${Number(row.id)}, 'Rejected')" ${closed ? "disabled" : ""}>Reject</button><button class="btn btn-secondary" onclick="updateApproval(${Number(row.id)}, 'Received')" ${status !== "approved" ? "disabled" : ""}>Mark Received</button></div></article>`;
+    }).join("") || `<div class="empty">No orders in workflow</div>`}</div>`;
     return;
   }
   if (route === "pricing") {
@@ -559,6 +563,19 @@ async function globalSearch() {
   box.innerHTML = results.slice(0, 7).map((item) => `<button onclick="navigate('${item.key}')"><strong>${coreModules[item.key].label}</strong><span>${escapeHtml(item.row.name || item.row.status || item.row.trackingNumber || `#${item.row.id}`)}</span></button>`).join("") || `<p>No matches</p>`;
   box.classList.remove("hidden");
 }
+
+window.updateApproval = async (id, status) => {
+  if (state.role !== "admin") return toast("Only admin can update approvals", "error");
+  try {
+    await api(`/api/orders/${id}`, { method: "PUT", body: { status } });
+    state.activity.unshift(`Order #${id} ${status}`);
+    toast(`Order ${status.toLowerCase()}`, "success");
+    await runAdvancedModule("approvals", true);
+    await loadDashboard();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+};
 
 window.downloadInvoice = (id) => {
   const invoice = (state.advancedCache.billing?.invoices || []).find((row) => Number(row.id) === Number(id));

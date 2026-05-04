@@ -1240,10 +1240,15 @@ canvas {
 }
 
 .module-actions,
-.modal-actions {
+.modal-actions,
+.approval-actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.approval-actions {
+  margin-top: 14px;
 }
 
 .table-tools {
